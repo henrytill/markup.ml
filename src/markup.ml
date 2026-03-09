@@ -109,10 +109,18 @@ struct
 
     let with_encoding (encoding : Encoding.t) byte_src k =
       let decoder = encoding ~report ~byte_src in
-      let int_ks = decoder_to_int_kstream decoder in
-      let processed = Input.preprocess Common.is_valid_xml_char report int_ks in
-      Xml_tokenizer.tokenize report entity processed
-      |> Xml_parser.parse context namespace report
+      let context' =
+        match context with
+        | None -> None
+        | Some `Document -> Some `Document
+        | Some `Fragment -> Some `Fragment
+      in
+      let xi = Xml_parser.make ~report ~resolve_reference:entity
+        ~namespace ~context:context' ~decoder in
+      Kstream.make (fun _ e k ->
+        match Xml_parser.next_signal xi with
+        | None -> e ()
+        | Some v -> k v)
       |> k
     in
 
