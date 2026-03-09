@@ -10,3 +10,13 @@ val parse :
   (Html_tokenizer.state -> unit) *
   ((unit -> bool) -> unit) ->
     (location * signal) Kstream.t
+
+type html_input
+
+val make :
+  report:Error.parse_handler ->
+  ?context:[< `Document | `Fragment of string ] ->
+  (unit -> int) ->
+  html_input
+
+val next_signal : html_input -> (location * signal) option

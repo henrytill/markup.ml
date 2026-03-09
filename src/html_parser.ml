@@ -2898,3 +2898,29 @@ mode' ())
   in
 
   construct constructor
+
+
+(** Direct-style interface for HTML parsing. *)
+type html_input = {
+  signal_stream : (Common.location * Common.signal) Kstream.t;
+  mutable done_ : bool;
+}
+
+let make ~report ?context (decoder : unit -> int) : html_input =
+  let int_ks = Kstream.make (fun _ e k ->
+    let v = decoder () in if v = -1 then e () else k v) in
+  let processed = Input.preprocess Common.is_valid_html_char report int_ks in
+  let token_stream, set_state, set_foreign =
+    Html_tokenizer.tokenize report processed in
+  let signal_stream =
+    parse context report (token_stream, set_state, set_foreign) in
+  { signal_stream; done_ = false }
+
+let next_signal (hi : html_input) =
+  if hi.done_ then None
+  else begin
+    let result = ref None in
+    Kstream.next_option hi.signal_stream raise (fun v -> result := v);
+    (match !result with None -> hi.done_ <- true | Some _ -> ());
+    !result
+  end

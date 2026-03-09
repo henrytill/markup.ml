@@ -86,15 +86,6 @@ let stream_to_parser s =
     s |> Kstream.map (fun (l, v) _ k -> parser.location <- l; k v);
   parser
 
-(** Bridge: byte_src -> char kstream (for the Cps pipeline).
-    We don't need this anymore since we go byte_src -> decoder -> kstream. *)
-
-(** Bridge: decoder (unit -> int) -> int Kstream.t *)
-let decoder_to_int_kstream (dec : unit -> int) : int Kstream.t =
-  Kstream.make (fun _ e k ->
-    let v = dec () in
-    if v = -1 then e () else k v)
-
 module Cps =
 struct
   let parse_xml
@@ -151,10 +142,11 @@ struct
 
     let with_encoding (encoding : Encoding.t) byte_src k =
       let decoder = encoding ~report ~byte_src in
-      let int_ks = decoder_to_int_kstream decoder in
-      let processed = Input.preprocess Common.is_valid_html_char report int_ks in
-      Html_tokenizer.tokenize report processed
-      |> Html_parser.parse context report
+      let hi = Html_parser.make ~report ?context decoder in
+      Kstream.make (fun _ e k ->
+        match Html_parser.next_signal hi with
+        | None -> e ()
+        | Some v -> k v)
       |> k
     in
 
