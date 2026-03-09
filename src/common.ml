@@ -63,7 +63,8 @@ type general_token =
 let u_rep = Uchar.to_int Uutf.u_rep
 
 let add_utf_8 buffer c =
-  Uutf.Buffer.add_utf_8 buffer (Uchar.unsafe_of_int c)
+  if c < 0x80 then Buffer.add_char buffer (Char.unsafe_chr c)
+  else Uutf.Buffer.add_utf_8 buffer (Uchar.unsafe_of_int c)
 
 let format_char = Printf.sprintf "U+%04X"
 
