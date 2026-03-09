@@ -23,7 +23,7 @@ let expect_error :
     unit
     = fun ?(allow_recovery = 0) l error f ->
   let errors = ref 0 in
-  let report l' error' _ k =
+  let report l' error' =
     errors := !errors + 1;
 
     if !errors > 1 + allow_recovery then
@@ -34,9 +34,7 @@ let expect_error :
       sprintf "got error \"%s\"\nexpected \"%s\""
         (Error.to_string ~location:l' error')
         (Error.to_string ~location:l error)
-      |> assert_failure;
-
-    k ()
+      |> assert_failure
   in
 
   f report;
@@ -104,7 +102,7 @@ let expect_signals ?prefix signal_to_string id signals =
 
   let receive, ended = expect_sequence ?prefix id to_string signals in
 
-  let report (l, c) e throw k = receive (l, c, E e) throw; k () in
+  let report (l, c) e = receive (l, c, E e) (fun _ -> ()) in
   let signal ((l, c), s) throw k = receive (l, c, S s) throw; k () in
 
   report, signal, ended
@@ -117,7 +115,7 @@ let expect_strings id strings =
 
   let receive, ended = expect_sequence id to_string strings in
 
-  let report _ e throw k = receive (E e) throw; k () in
+  let report _ e = receive (E e) (fun _ -> ()) in
   let string s throw k = receive (S s) throw; k () in
 
   report, string, ended

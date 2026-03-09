@@ -3,7 +3,7 @@
 
 open Markup__Common
 
-val wrong_k : string -> _ cont
+val wrong_k : string -> _ Markup__Kstream.cont
 
 val with_text_limit : int -> (unit -> unit) -> unit
 
@@ -21,11 +21,16 @@ val expect_signals :
   ('a -> string) ->
   string ->
   (int * int * 'a general_signal) list ->
-    Markup__Error.parse_handler * ((location * 'a) -> unit cps) *
+    Markup__Error.parse_handler *
+      ((location * 'a) -> (exn -> unit) -> (unit -> unit) -> unit) *
       (unit -> unit)
 
 val expect_strings :
   string -> string general_signal list ->
-    Markup__Error.write_handler * (string -> unit cps) * (unit -> unit)
+    Markup__Error.write_handler *
+      (string -> (exn -> unit) -> (unit -> unit) -> unit) *
+      (unit -> unit)
 
-val iter : ('a -> unit cps) -> 'a Markup__Kstream.t -> unit
+val iter :
+  ('a -> (exn -> unit) -> (unit -> unit) -> unit) ->
+  'a Markup__Kstream.t -> unit

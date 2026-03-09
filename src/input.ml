@@ -39,9 +39,8 @@ let preprocess is_valid_char report source =
 
           | c when not (is_valid_char c) ->
             report (!line, !column)
-              (`Bad_token (format_char c, "input", "out of range"))
-              throw (fun () ->
-            symbol c)
+              (`Bad_token (format_char c, "input", "out of range"));
+            symbol c
 
           | c -> symbol c)
       in

@@ -126,46 +126,36 @@ let tokenize report (input, get_location) =
     emit (get_location (), `EOF) (fun () -> !ended ())
 
   and emit_tag l tag' =
-    let rec rev_deduplicate accumulator seen attributes k =
-      match attributes with
-      | [] -> k accumulator
-      | (n, v)::more ->
-        if list_mem_string n seen then
-          report l (`Bad_token (n, "tag", "duplicate attribute")) !throw
-            (fun () ->
-          rev_deduplicate accumulator seen more k)
-        else rev_deduplicate ((n, v)::accumulator) (n::seen) more k
+    let attributes =
+      let rec rev_dedup accumulator seen = function
+        | [] -> accumulator
+        | (n, v)::more ->
+          if list_mem_string n seen then begin
+            report l (`Bad_token (n, "tag", "duplicate attribute"));
+            rev_dedup accumulator seen more
+          end else rev_dedup ((n, v)::accumulator) (n::seen) more
+      in
+      List.rev (rev_dedup [] [] (List.rev tag'.Tag_buffers.attributes))
     in
-
-    rev_deduplicate [] [] (List.rev tag'.Tag_buffers.attributes)
-      (fun attributes ->
 
     let tag =
       {Token_tag.name = Buffer.contents tag'.tag_name;
        self_closing   = tag'.self_closing;
-       attributes     = List.rev attributes}
+       attributes}
     in
 
-    (fun k ->
-      if tag'.start then begin
-        last_start_tag_name := Some tag.name;
-        k (`Start tag)
-      end
-      else
-        (fun k ->
-          match attributes with
-          | (n, _)::_ ->
-            report l (`Bad_token (n, "tag", "end tag with attributes")) !throw k
-          | _ -> k ())
-        @@ (fun k () ->
-          if tag.Token_tag.self_closing then
-            report l (`Bad_token ("/>", "tag",
-                                  "end tag cannot be self-closing")) !throw k
-          else k ())
-        @@ (fun () -> k (`End tag)))
-
-    (fun token ->
-      emit (l, token) data_state))
+    if tag'.start then begin
+      last_start_tag_name := Some tag.name;
+      emit (l, `Start tag) data_state
+    end else begin
+      (match attributes with
+      | (n, _)::_ ->
+        report l (`Bad_token (n, "tag", "end tag with attributes"))
+      | _ -> ());
+      if tag.Token_tag.self_closing then
+        report l (`Bad_token ("/>", "tag", "end tag cannot be self-closing"));
+      emit (l, `End tag) data_state
+    end
 
   and emit_comment l buffer =
     emit (l, `Comment (Buffer.contents buffer)) data_state
@@ -222,8 +212,8 @@ let tokenize report (input, get_location) =
                 push_option input v;
                 report location
                   (`Bad_token (prefix ^ text, "character reference",
-                               "missing ';' at end")) !throw (fun () ->
-                k "")
+                               "missing ';' at end"));
+                k ""
             end
           in
 
@@ -238,35 +228,34 @@ let tokenize report (input, get_location) =
             | None ->
               report location
                 (`Bad_token (prefix ^ text ^ semicolon, "character reference",
-                             "out of range")) !throw (fun () ->
-              k (Some (`One u_rep)))
+                             "out of range"));
+              k (Some (`One u_rep))
           in
 
           consume_semicolon begin fun semicolon ->
             convert s semicolon begin fun n' ->
               let n = replace_windows_1252_entity n' in
 
-              if n <> n' then
+              if n <> n' then begin
                 report location
                   (`Bad_token (prefix ^ text ^ semicolon, "character reference",
-                               "Windows-1252 character")) !throw (fun () ->
-                k (Some (`One n)))
-
-              else
+                               "Windows-1252 character"));
+                k (Some (`One n))
+              end else
                 match n with
                 | n when not @@ is_scalar n || n = 0 ->
                   report location
                     (`Bad_token (prefix ^ text ^ semicolon,
                                  "character reference", "out of range"))
-                    !throw (fun () ->
-                  k (Some (`One u_rep)))
+                   ;
+                  k (Some (`One u_rep))
 
                 | n when is_control_character n || is_non_character n ->
                   report location
                     (`Bad_token (prefix ^ text ^ semicolon,
                                  "character reference",
-                                 "invalid HTML character")) !throw (fun () ->
-                  k (Some (`One n)))
+                                 "invalid HTML character"));
+                  k (Some (`One n))
 
                 | n -> k (Some (`One n))
               end
@@ -285,8 +274,8 @@ let tokenize report (input, get_location) =
 
                     report location (`Bad_token
                       (prefix, "character reference", "expected digits"))
-                      !throw (fun () ->
-                    k None)
+                     ;
+                    k None
 
                   | Some s -> finish_digits prefix s ("0x" ^ s)))
 
@@ -299,8 +288,8 @@ let tokenize report (input, get_location) =
 
                   report location (`Bad_token
                     (prefix, "character reference", "expected digits"))
-                    !throw (fun () ->
-                  k None)
+                   ;
+                  k None
 
                 | Some s -> finish_digits prefix s s)))
 
@@ -345,8 +334,8 @@ let tokenize report (input, get_location) =
               | Some s ->
                 report location
                   (`Bad_token ("&" ^ s ^ ";", "entity reference",
-                               "no such entity")) !throw (fun () ->
-                k None))
+                               "no such entity"));
+                k None)
           | Some (text, code_points) ->
             next_option input !throw (function
               | Some (_, 0x003B) -> k (Some code_points)
@@ -356,8 +345,8 @@ let tokenize report (input, get_location) =
 
                   report location
                     (`Bad_token ("&" ^ text, "entity reference",
-                     "missing ';' at end")) !throw (fun () ->
-                  k (Some code_points))
+                     "missing ';' at end"));
+                  k (Some code_points)
                 in
 
                 if not in_attribute then unterminated ()
@@ -371,9 +360,8 @@ let tokenize report (input, get_location) =
 
                     report location
                       (`Bad_token ("&" ^ text ^ "=", "attribute",
-                        "unterminated entity reference followed by '='"))
-                      !throw(fun () ->
-                    k None)
+                        "unterminated entity reference followed by '='"));
+                    k None
                   | _ -> unterminated ())
         in
 
@@ -409,8 +397,8 @@ let tokenize report (input, get_location) =
         tag_open_state l
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "content", "null")) !throw (fun () ->
-        emit (l, `Char 0) data_state)
+        report l (`Bad_token ("U+0000", "content", "null"));
+        emit (l, `Char 0) data_state
 
       | None ->
         emit_eof ()
@@ -443,8 +431,8 @@ let tokenize report (input, get_location) =
         text_less_than_sign_state rcdata_state l [v]
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "content", "null")) !throw (fun () ->
-        emit (l, `Char u_rep) rcdata_state)
+        report l (`Bad_token ("U+0000", "content", "null"));
+        emit (l, `Char u_rep) rcdata_state
 
       | None ->
         emit_eof ()
@@ -460,8 +448,8 @@ let tokenize report (input, get_location) =
         text_less_than_sign_state rawtext_state l [v]
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "content", "null")) !throw (fun () ->
-        emit (l, `Char u_rep) rawtext_state)
+        report l (`Bad_token ("U+0000", "content", "null"));
+        emit (l, `Char u_rep) rawtext_state
 
       | None ->
         emit_eof ()
@@ -477,8 +465,8 @@ let tokenize report (input, get_location) =
         script_data_less_than_sign_state l [v]
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "content", "null")) !throw (fun () ->
-        emit_character l u_rep script_data_state)
+        report l (`Bad_token ("U+0000", "content", "null"));
+        emit_character l u_rep script_data_state
 
       | None ->
         emit_eof ()
@@ -491,8 +479,8 @@ let tokenize report (input, get_location) =
   and plaintext_state () =
     next_option input !throw begin function
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "content", "null")) !throw (fun () ->
-        emit (l, `Char u_rep) plaintext_state)
+        report l (`Bad_token ("U+0000", "content", "null"));
+        emit (l, `Char u_rep) plaintext_state
 
       | None ->
         emit_eof ()
@@ -525,19 +513,19 @@ let tokenize report (input, get_location) =
         report l'
           (`Bad_token ("<?", "content",
                        "HTML does not have processing instructions"))
-          !throw (fun () ->
-        bogus_comment_state l')
+         ;
+        bogus_comment_state l'
 
       | Some ((l, c) as v) ->
         report l
           (`Bad_token (char c, "tag",
-                       "invalid start character")) !throw (fun () ->
+                       "invalid start character"));
         push input v;
-        emit_character l' 0x003C data_state)
+        emit_character l' 0x003C data_state
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "tag") !throw (fun () ->
-        emit_character l' 0x003C data_state)
+        report (get_location ()) (`Unexpected_eoi "tag");
+        emit_character l' 0x003C data_state
     end
 
   (* 8.2.4.9. *)
@@ -550,19 +538,20 @@ let tokenize report (input, get_location) =
         tag_name_state l' tag
 
       | Some (_, 0x003E) ->
-        report l' (`Bad_token ("</>", "tag", "no tag name")) !throw data_state
+        report l' (`Bad_token ("</>", "tag", "no tag name"));
+        data_state ()
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "tag") !throw (fun () ->
+        report (get_location ()) (`Unexpected_eoi "tag");
         let line, column = l' in
         emit (l', `Char 0x003C) (fun () ->
-        emit ((line, column + 1), `Char 0x002F) data_state))
+        emit ((line, column + 1), `Char 0x002F) data_state)
 
       | Some (l, c) ->
         report l
           (`Bad_token (char c, "tag",
-                       "invalid start character")) !throw (fun () ->
-        bogus_comment_state l')
+                       "invalid start character"));
+        bogus_comment_state l'
     end
 
   (* 8.2.4.10. *)
@@ -578,12 +567,13 @@ let tokenize report (input, get_location) =
         emit_tag l' tag
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "tag name", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "tag name", "null"));
         add_utf_8 tag.tag_name u_rep;
-        tag_name_state l' tag)
+        tag_name_state l' tag
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "tag") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "tag");
+        data_state ()
 
       | Some (_, c) ->
         add_utf_8 tag.tag_name (to_lowercase c);
@@ -692,12 +682,13 @@ let tokenize report (input, get_location) =
         script_data_escaped_less_than_sign_state l' l [v]
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "script", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "script", "null"));
         emit_character l u_rep (fun () ->
-        script_data_escaped_state l'))
+        script_data_escaped_state l')
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "script") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "script");
+        data_state ()
 
       | Some (l, c) ->
         emit_character l c (fun () ->
@@ -715,12 +706,13 @@ let tokenize report (input, get_location) =
         script_data_escaped_less_than_sign_state l' l [v]
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "script", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "script", "null"));
         emit_character l u_rep (fun () ->
-        script_data_escaped_state l'))
+        script_data_escaped_state l')
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "script") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "script");
+        data_state ()
 
       | Some (l, c) ->
         emit_character l c (fun () ->
@@ -741,12 +733,13 @@ let tokenize report (input, get_location) =
         emit_character l 0x003E script_data_state
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "script", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "script", "null"));
         emit_character l u_rep (fun () ->
-        script_data_escaped_state l'))
+        script_data_escaped_state l')
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "script") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "script");
+        data_state ()
 
       | Some (l, c) ->
         emit_character l c (fun () ->
@@ -803,12 +796,13 @@ let tokenize report (input, get_location) =
         script_data_double_escaped_less_than_sign_state l')
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "script", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "script", "null"));
         emit_character l u_rep (fun () ->
-        script_data_double_escaped_state l'))
+        script_data_double_escaped_state l')
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "script") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "script");
+        data_state ()
 
       | Some (l, c) ->
         emit_character l c (fun () ->
@@ -827,12 +821,13 @@ let tokenize report (input, get_location) =
         script_data_double_escaped_less_than_sign_state l')
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "script", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "script", "null"));
         emit_character l u_rep (fun () ->
-        script_data_double_escaped_state l'))
+        script_data_double_escaped_state l')
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "script") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "script");
+        data_state ()
 
       | Some (l, c) ->
         emit_character l c (fun () ->
@@ -854,12 +849,13 @@ let tokenize report (input, get_location) =
         emit_character l 0x003E script_data_state
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "script", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "script", "null"));
         emit_character l u_rep (fun () ->
-        script_data_double_escaped_state l'))
+        script_data_double_escaped_state l')
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "script") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "script");
+        data_state ()
 
       | Some (l, c) ->
         emit_character l c (fun () ->
@@ -917,17 +913,17 @@ let tokenize report (input, get_location) =
         emit_tag l' tag
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "tag") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "tag");
+        data_state ()
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "attribute name", "null")) !throw
-          (fun () ->
-        start_attribute u_rep)
+        report l (`Bad_token ("U+0000", "attribute name", "null"));
+        start_attribute u_rep
 
       | Some (l, (0x0022 | 0x0027 | 0x003C | 0x003D as c)) ->
         report l (`Bad_token (char c, "attribute name",
-                              "invalid start character")) !throw (fun () ->
-        start_attribute c)
+                              "invalid start character"));
+        start_attribute c
 
       | Some (_, c) ->
         start_attribute (to_lowercase c)
@@ -951,19 +947,19 @@ let tokenize report (input, get_location) =
         emit_tag l' tag
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "attribute name", "null")) !throw
-          (fun () ->
+        report l (`Bad_token ("U+0000", "attribute name", "null"));
         add_utf_8 name_buffer u_rep;
-        attribute_name_state l' tag name_buffer)
+        attribute_name_state l' tag name_buffer
 
       | Some (l, (0x0022 | 0x0027 | 0x003C as c)) ->
         report l (`Bad_token (char c, "attribute name",
-                              "invalid name character")) !throw (fun () ->
+                              "invalid name character"));
         add_utf_8 name_buffer c;
-        attribute_name_state l' tag name_buffer)
+        attribute_name_state l' tag name_buffer
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "tag") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "tag");
+        data_state ()
 
       | Some (_, c) ->
         add_utf_8 name_buffer (to_lowercase c);
@@ -995,17 +991,17 @@ let tokenize report (input, get_location) =
         emit_tag l' tag
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "attribute name", "null")) !throw
-          (fun () ->
-        start_next_attribute u_rep)
+        report l (`Bad_token ("U+0000", "attribute name", "null"));
+        start_next_attribute u_rep
 
       | Some (l, (0x0022 | 0x0027 | 0x003C as c)) ->
         report l (`Bad_token (char c, "attribute name",
-                              "invalid start character")) !throw (fun () ->
-        start_next_attribute c)
+                              "invalid start character"));
+        start_next_attribute c
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "tag") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "tag");
+        data_state ()
 
       | Some (_, c) ->
         start_next_attribute (to_lowercase c)
@@ -1034,23 +1030,23 @@ let tokenize report (input, get_location) =
         start_value attribute_value_unquoted_state None
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "attribute value", "null")) !throw
-          (fun () ->
-        start_value attribute_value_unquoted_state (Some u_rep))
+        report l (`Bad_token ("U+0000", "attribute value", "null"));
+        start_value attribute_value_unquoted_state (Some u_rep)
 
       | Some (l, 0x003E) ->
         report l (`Bad_token (">", "tag", "expected attribute value after '='"))
-          !throw (fun () ->
+         ;
         tag.attributes <- (name, "")::tag.attributes;
-        emit_tag l' tag)
+        emit_tag l' tag
 
       | Some (l, (0x003C | 0x003D | 0x0060 as c)) ->
         report l (`Bad_token (char c, "attribute value",
-                              "invalid start character")) !throw (fun () ->
-        start_value attribute_value_unquoted_state (Some c))
+                              "invalid start character"));
+        start_value attribute_value_unquoted_state (Some c)
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "tag") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "tag");
+        data_state ()
 
       | Some (_, c) ->
         start_value attribute_value_unquoted_state (Some c)
@@ -1069,14 +1065,13 @@ let tokenize report (input, get_location) =
         attribute_value_quoted_state quote l' tag name value_buffer)
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "attribute value", "null")) !throw
-          (fun () ->
+        report l (`Bad_token ("U+0000", "attribute value", "null"));
         add_utf_8 value_buffer u_rep;
-        attribute_value_quoted_state quote l' tag name value_buffer)
+        attribute_value_quoted_state quote l' tag name value_buffer
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "attribute value") !throw
-          data_state
+        report (get_location ()) (`Unexpected_eoi "attribute value");
+        data_state ()
 
       | Some (_, c) ->
         add_utf_8 value_buffer c;
@@ -1101,19 +1096,19 @@ let tokenize report (input, get_location) =
         emit_tag l' tag
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "attribute value", "null")) !throw
-          (fun () ->
+        report l (`Bad_token ("U+0000", "attribute value", "null"));
         add_utf_8 value_buffer u_rep;
-        attribute_value_unquoted_state l' tag name value_buffer)
+        attribute_value_unquoted_state l' tag name value_buffer
 
       | Some (l, (0x0022 | 0x0027 | 0x003C | 0x003D | 0x0060 as c)) ->
         report l (`Bad_token (char c, "attribute value",
-                              "invalid character")) !throw (fun () ->
+                              "invalid character"));
         add_utf_8 value_buffer c;
-        attribute_value_unquoted_state l' tag name value_buffer)
+        attribute_value_unquoted_state l' tag name value_buffer
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "tag") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "tag");
+        data_state ()
 
       | Some (_, c) ->
         add_utf_8 value_buffer c;
@@ -1150,14 +1145,15 @@ let tokenize report (input, get_location) =
         emit_tag l' tag
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "tag") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "tag");
+        data_state ()
 
       | Some (l, c as v) ->
         push input v;
         report l (`Bad_token (char c, "tag",
                               "expected whitespace before attribute"))
-          !throw (fun () ->
-        before_attribute_name_state l' tag)
+         ;
+        before_attribute_name_state l' tag
     end
 
   (* 8.2.4.43. *)
@@ -1168,13 +1164,14 @@ let tokenize report (input, get_location) =
         emit_tag l' tag
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "tag") !throw data_state
+        report (get_location ()) (`Unexpected_eoi "tag");
+        data_state ()
 
       | Some (l, c as v) ->
         push input v;
         report l
-          (`Bad_token (char c, "tag", "expected '/>'")) !throw (fun () ->
-        before_attribute_name_state l' tag)
+          (`Bad_token (char c, "tag", "expected '/>'"));
+        before_attribute_name_state l' tag
     end
 
   (* 8.2.4.44. *)
@@ -1220,18 +1217,18 @@ let tokenize report (input, get_location) =
                 if !foreign () then
                   next_n 7 input !throw (fun _ ->
                   cdata_section_state ())
-                else
+                else begin
                   report l'
                     (`Bad_token ("<![CDATA[", "content",
-                                 "CDATA sections not allowed in HTML"))
-                    !throw (fun () ->
-                  bogus_comment_state l')
+                                 "CDATA sections not allowed in HTML"));
+                  bogus_comment_state l'
+                end
 
               | _ ->
                 report l'
                   (`Bad_token ("<!", "comment", "should begin with '<!--'"))
-                  !throw (fun () ->
-                bogus_comment_state l'))
+                 ;
+                bogus_comment_state l')
         end
     end
 
@@ -1242,18 +1239,18 @@ let tokenize report (input, get_location) =
         comment_start_dash_state l' buffer
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "comment", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "comment", "null"));
         add_utf_8 buffer u_rep;
-        comment_state l' buffer)
+        comment_state l' buffer
 
       | Some (_, 0x003E) ->
         report l' (`Bad_token ("<!-->", "comment", "'-->' overlaps '<!--'"))
-          !throw (fun () ->
-        emit_comment l' buffer)
+         ;
+        emit_comment l' buffer
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "comment") !throw (fun () ->
-        emit_comment l' buffer)
+        report (get_location ()) (`Unexpected_eoi "comment");
+        emit_comment l' buffer
 
       | Some (_, c) ->
         add_utf_8 buffer c;
@@ -1267,19 +1264,19 @@ let tokenize report (input, get_location) =
         comment_end_state l' buffer
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "comment", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "comment", "null"));
         Buffer.add_char buffer '-';
         add_utf_8 buffer u_rep;
-        comment_state l' buffer)
+        comment_state l' buffer
 
       | Some (_, 0x003E) ->
         report l' (`Bad_token ("<!--->", "comment", "'-->' overlaps '<!--'"))
-          !throw (fun () ->
-        emit_comment l' buffer)
+         ;
+        emit_comment l' buffer
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "comment") !throw (fun () ->
-        emit_comment l' buffer)
+        report (get_location ()) (`Unexpected_eoi "comment");
+        emit_comment l' buffer
 
       | Some (_, c) ->
         Buffer.add_char buffer '-';
@@ -1294,13 +1291,13 @@ let tokenize report (input, get_location) =
         comment_end_dash_state l' buffer
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "comment", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "comment", "null"));
         add_utf_8 buffer u_rep;
-        comment_state l' buffer)
+        comment_state l' buffer
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "comment") !throw (fun () ->
-        emit_comment l' buffer)
+        report (get_location ()) (`Unexpected_eoi "comment");
+        emit_comment l' buffer
 
       | Some (_, c) ->
         add_utf_8 buffer c;
@@ -1314,14 +1311,14 @@ let tokenize report (input, get_location) =
         comment_end_state l' buffer
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "comment", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "comment", "null"));
         Buffer.add_char buffer '-';
         add_utf_8 buffer u_rep;
-        comment_state l' buffer)
+        comment_state l' buffer
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "comment") !throw (fun () ->
-        emit_comment l' buffer)
+        report (get_location ()) (`Unexpected_eoi "comment");
+        emit_comment l' buffer
 
       | Some (_, c) ->
         Buffer.add_char buffer '-';
@@ -1336,32 +1333,32 @@ let tokenize report (input, get_location) =
         emit_comment l' buffer
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "comment", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "comment", "null"));
         Buffer.add_string buffer "--";
         add_utf_8 buffer u_rep;
-        comment_state l' buffer)
+        comment_state l' buffer
 
       | Some (l, 0x0021) ->
         report l (`Bad_token ("--!", "comment", "'--' should be in '-->'"))
-          !throw (fun () ->
-        comment_end_bang_state l' buffer)
+         ;
+        comment_end_bang_state l' buffer
 
       | Some (l, 0x002D) ->
         report l (`Bad_token ("---", "comment", "'--' should be in '-->'"))
-          !throw (fun () ->
+         ;
         Buffer.add_char buffer '-';
-        comment_end_state l' buffer)
+        comment_end_state l' buffer
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "comment") !throw (fun () ->
-        emit_comment l' buffer)
+        report (get_location ()) (`Unexpected_eoi "comment");
+        emit_comment l' buffer
 
       | Some (l, c) ->
         report l (`Bad_token ("--" ^ (char c), "comment",
-                              "'--' should be in '-->'")) !throw (fun () ->
+                              "'--' should be in '-->'"));
         Buffer.add_string buffer "--";
         add_utf_8 buffer c;
-        comment_state l' buffer)
+        comment_state l' buffer
     end
 
   (* 8.2.4.51. *)
@@ -1375,14 +1372,14 @@ let tokenize report (input, get_location) =
         emit_comment l' buffer
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "comment", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "comment", "null"));
         Buffer.add_string buffer "--!";
         add_utf_8 buffer u_rep;
-        comment_state l' buffer)
+        comment_state l' buffer
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "comment") !throw (fun () ->
-        emit_comment l' buffer)
+        report (get_location ()) (`Unexpected_eoi "comment");
+        emit_comment l' buffer
 
       | Some (_, c) ->
         Buffer.add_string buffer "--!";
@@ -1404,14 +1401,14 @@ let tokenize report (input, get_location) =
         before_doctype_name_state l' doctype
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "doctype") !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report (get_location ()) (`Unexpected_eoi "doctype");
+        emit_doctype ~quirks:true l' doctype
 
       | Some (l, c as v) ->
         report l (`Bad_token (char c, "doctype",
-                              "expected whitespace")) !throw (fun () ->
+                              "expected whitespace"));
         push input v;
-        before_doctype_name_state l' doctype)
+        before_doctype_name_state l' doctype
     end
 
   (* 8.2.5.53. *)
@@ -1421,18 +1418,17 @@ let tokenize report (input, get_location) =
         before_doctype_name_state l' doctype
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "doctype", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "doctype", "null"));
         doctype.doctype_name <- add_doctype_char doctype.doctype_name u_rep;
-        doctype_name_state l' doctype)
+        doctype_name_state l' doctype
 
       | Some (l, 0x003E) ->
-        report l (`Bad_token (">", "doctype", "expected name")) !throw
-          (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report l (`Bad_token (">", "doctype", "expected name"));
+        emit_doctype ~quirks:true l' doctype
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "doctype") !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report (get_location ()) (`Unexpected_eoi "doctype");
+        emit_doctype ~quirks:true l' doctype
 
       | Some (_, c) ->
         doctype.doctype_name <-
@@ -1450,14 +1446,14 @@ let tokenize report (input, get_location) =
         emit_doctype l' doctype
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "doctype", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "doctype", "null"));
         doctype.doctype_name <-
           add_doctype_char doctype.doctype_name u_rep;
-        doctype_name_state l' doctype)
+        doctype_name_state l' doctype
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "doctype") !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report (get_location ()) (`Unexpected_eoi "doctype");
+        emit_doctype ~quirks:true l' doctype
 
       | Some (_, c) ->
         doctype.doctype_name <-
@@ -1475,8 +1471,8 @@ let tokenize report (input, get_location) =
         emit_doctype l' doctype
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "doctype") !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report (get_location ()) (`Unexpected_eoi "doctype");
+        emit_doctype ~quirks:true l' doctype
 
       | Some (l'', c as v) ->
         push input v;
@@ -1491,10 +1487,9 @@ let tokenize report (input, get_location) =
           | vs ->
             push_list input vs;
             report l'' (`Bad_token (char c, "doctype",
-                                    "expected 'PUBLIC' or 'SYSTEM'")) !throw
-              (fun () ->
+                                    "expected 'PUBLIC' or 'SYSTEM'"));
             doctype.force_quirks <- true;
-            bogus_doctype_state l' doctype)
+            bogus_doctype_state l' doctype
         end
     end
 
@@ -1524,23 +1519,23 @@ let tokenize report (input, get_location) =
 
       | Some (l, (0x0022 | 0x0027 as c)) ->
         report l (`Bad_token (char c, "doctype",
-                              "expected whitespace")) !throw (fun () ->
-        begin_public_identifier c l' doctype)
+                              "expected whitespace"));
+        begin_public_identifier c l' doctype
 
       | Some (l, 0x003E) ->
         report l (`Bad_token (">", "doctype", "expected public identifier"))
-          !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+         ;
+        emit_doctype ~quirks:true l' doctype
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "doctype") !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report (get_location ()) (`Unexpected_eoi "doctype");
+        emit_doctype ~quirks:true l' doctype
 
       | Some (l, c) ->
         report l (`Bad_token (char c, "doctype",
-                              "expected whitespace")) !throw (fun () ->
+                              "expected whitespace"));
         doctype.force_quirks <- true;
-        bogus_doctype_state l' doctype)
+        bogus_doctype_state l' doctype
     end
 
   (* 8.2.4.57. *)
@@ -1554,19 +1549,18 @@ let tokenize report (input, get_location) =
 
       | Some (l, 0x003E) ->
         report l (`Bad_token (">", "doctype", "expected public identifier"))
-          !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+         ;
+        emit_doctype ~quirks:true l' doctype
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "doctype") !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report (get_location ()) (`Unexpected_eoi "doctype");
+        emit_doctype ~quirks:true l' doctype
 
       | Some (l, c) ->
         report l (`Bad_token (char c, "doctype",
-                              "public identifier must be quoted")) !throw
-          (fun () ->
+                              "public identifier must be quoted"));
         doctype.force_quirks <- true;
-        bogus_doctype_state l' doctype)
+        bogus_doctype_state l' doctype
     end
 
   (* 8.2.4.58, 8.2.4.59, 8.2.4.64, 8.2.4.65. *)
@@ -1576,18 +1570,17 @@ let tokenize report (input, get_location) =
         next_state l' doctype
 
       | Some (l, 0) ->
-        report l (`Bad_token ("U+0000", "doctype", "null")) !throw (fun () ->
+        report l (`Bad_token ("U+0000", "doctype", "null"));
         add doctype u_rep;
-        doctype_identifier_quoted_state add quote next_state l' doctype)
+        doctype_identifier_quoted_state add quote next_state l' doctype
 
       | Some (l, 0x003E) ->
-        report l (`Bad_token (">", "doctype", "'>' in identifier")) !throw
-          (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report l (`Bad_token (">", "doctype", "'>' in identifier"));
+        emit_doctype ~quirks:true l' doctype
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "doctype") !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report (get_location ()) (`Unexpected_eoi "doctype");
+        emit_doctype ~quirks:true l' doctype
 
       | Some (_, c) ->
         add doctype c;
@@ -1604,19 +1597,18 @@ let tokenize report (input, get_location) =
 
       | Some (l, (0x0022 | 0x0027 as c)) ->
         report l (`Bad_token (char c, "doctype",
-                              "expected whitespace")) !throw (fun () ->
-        begin_system_identifier c l' doctype)
+                              "expected whitespace"));
+        begin_system_identifier c l' doctype
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "doctype") !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report (get_location ()) (`Unexpected_eoi "doctype");
+        emit_doctype ~quirks:true l' doctype
 
       | Some (l, c) ->
         report l (`Bad_token (char c, "doctype",
-                              "system identifier must be quoted")) !throw
-          (fun () ->
+                              "system identifier must be quoted"));
         doctype.force_quirks <- true;
-        bogus_doctype_state l' doctype)
+        bogus_doctype_state l' doctype
     end
 
   (* 8.2.4.61. *)
@@ -1632,15 +1624,14 @@ let tokenize report (input, get_location) =
         begin_system_identifier c l' doctype
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "doctype") !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report (get_location ()) (`Unexpected_eoi "doctype");
+        emit_doctype ~quirks:true l' doctype
 
       | Some (l, c) ->
         report l (`Bad_token (char c, "doctype",
-                              "system identifier must be quoted")) !throw
-          (fun () ->
+                              "system identifier must be quoted"));
         doctype.force_quirks <- true;
-        bogus_doctype_state l' doctype)
+        bogus_doctype_state l' doctype
     end
 
   (* 8.2.4.62. *)
@@ -1651,23 +1642,23 @@ let tokenize report (input, get_location) =
 
       | Some (l, (0x0022 | 0x0027 as c)) ->
         report l (`Bad_token (char c, "doctype",
-                              "expected whitespace")) !throw (fun () ->
-        begin_system_identifier c l' doctype)
+                              "expected whitespace"));
+        begin_system_identifier c l' doctype
 
       | Some (l, 0x003E) ->
         report l (`Bad_token (">", "doctype", "expected system identifier"))
-          !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+         ;
+        emit_doctype ~quirks:true l' doctype
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "doctype") !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report (get_location ()) (`Unexpected_eoi "doctype");
+        emit_doctype ~quirks:true l' doctype
 
       | Some (l, c) ->
         report l (`Bad_token (char c, "doctype",
-                              "expected whitespace")) !throw (fun () ->
+                              "expected whitespace"));
         doctype.force_quirks <- true;
-        bogus_doctype_state l' doctype)
+        bogus_doctype_state l' doctype
     end
 
   (* 8.2.4.63. *)
@@ -1681,19 +1672,18 @@ let tokenize report (input, get_location) =
 
       | Some (l, 0x003E) ->
         report l (`Bad_token (">", "doctype", "expected system identifier"))
-          !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+         ;
+        emit_doctype ~quirks:true l' doctype
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "doctype") !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report (get_location ()) (`Unexpected_eoi "doctype");
+        emit_doctype ~quirks:true l' doctype
 
       | Some (l, c) ->
         report l (`Bad_token (char c, "doctype",
-                              "system identifier must be quoted")) !throw
-          (fun () ->
+                              "system identifier must be quoted"));
         doctype.force_quirks <- true;
-        bogus_doctype_state l' doctype)
+        bogus_doctype_state l' doctype
     end
 
   (* 8.2.4.66. *)
@@ -1706,13 +1696,13 @@ let tokenize report (input, get_location) =
         emit_doctype l' doctype
 
       | None ->
-        report (get_location ()) (`Unexpected_eoi "doctype") !throw (fun () ->
-        emit_doctype ~quirks:true l' doctype)
+        report (get_location ()) (`Unexpected_eoi "doctype");
+        emit_doctype ~quirks:true l' doctype
 
       | Some (l, c) ->
         report l (`Bad_token (char c, "doctype",
-                              "junk after system identifier")) !throw (fun () ->
-        bogus_doctype_state l' doctype)
+                              "junk after system identifier"));
+        bogus_doctype_state l' doctype
     end
 
   (* 8.2.4.67. *)

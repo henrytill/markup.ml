@@ -31,22 +31,21 @@ let parse context namespace report tokens =
 
   and push_and_emit l {name = raw_name; attributes} state =
     Namespace.Parsing.push (fun () -> report l) namespaces raw_name attributes
-      !throw (fun (expanded_name, attributes) ->
+      !throw (fun (expanded_name, expanded_attributes) ->
 
-    let rec deduplicate acc attributes k =
-      match attributes with
-      | [] -> k (List.rev acc)
-      | ((n, _) as attr)::more ->
-        if acc |> List.exists (fun (n', _) -> n' = n) then
-          report l (`Bad_token (snd n, "tag", "duplicate attribute")) !throw
-            (fun () -> deduplicate acc more k)
-        else
-          deduplicate (attr::acc) more k
+    let attributes =
+      List.fold_left (fun acc ((n, _) as attr) ->
+        if acc |> List.exists (fun (n', _) -> n' = n) then begin
+          report l (`Bad_token (snd n, "tag", "duplicate attribute"));
+          acc
+        end else
+          attr :: acc
+      ) [] expanded_attributes
+      |> List.rev
     in
 
-    deduplicate [] attributes (fun attributes ->
     open_elements := (l, expanded_name, raw_name)::!open_elements;
-    emit l (`Start_element (expanded_name, attributes)) state))
+    emit l (`Start_element (expanded_name, attributes)) state)
 
   and pop l state =
     match !open_elements with
@@ -107,11 +106,12 @@ let parse context namespace report tokens =
         emit l (`PI s) doctype_state
 
       | l, `Xml _ ->
-        report l (`Bad_document "XML declaration must be first") !throw
-          doctype_state
+        report l (`Bad_document "XML declaration must be first");
+        doctype_state ()
 
       | l, `Chars _ ->
-        report l (`Bad_document "text at top level") !throw doctype_state
+        report l (`Bad_document "text at top level");
+        doctype_state ()
 
       | v ->
         push tokens v;
@@ -137,15 +137,16 @@ let parse context namespace report tokens =
         emit l (`PI s) root_state
 
       | l, `Xml _ ->
-        report l (`Bad_document "XML declaration must be first") !throw
-          root_state
+        report l (`Bad_document "XML declaration must be first");
+        root_state ()
 
       | l, `EOF ->
-        report l (`Unexpected_eoi "document before root element") !throw
-          emit_end
+        report l (`Unexpected_eoi "document before root element");
+        emit_end ()
 
       | l, _ ->
-        report l (`Bad_document "expected root element") !throw root_state
+        report l (`Bad_document "expected root element");
+        root_state ()
     end
 
   and after_root_state () =
@@ -168,11 +169,10 @@ let parse context namespace report tokens =
         content_state ()
 
       | l, _ as v ->
-        report l (`Bad_document "not allowed after root element") !throw
-          (fun () ->
+        report l (`Bad_document "not allowed after root element");
         is_fragment := true;
         push tokens v;
-        content_state ())
+        content_state ()
     end
 
   and content_state () =
@@ -185,17 +185,20 @@ let parse context namespace report tokens =
           push_and_emit l t content_state
 
       | l, `End {name = raw_name} ->
-        Namespace.Parsing.expand_element (fun () -> report l) namespaces
-          raw_name !throw (fun expanded_name ->
+        let expanded_name =
+          Namespace.Parsing.expand_element (fun () -> report l) namespaces
+            raw_name
+        in
 
         let is_on_stack =
           !open_elements
           |> List.exists (fun (_, name, _) -> name = expanded_name)
         in
 
-        if not is_on_stack then
-          report l (`Unmatched_end_tag raw_name) !throw content_state
-        else
+        if not is_on_stack then begin
+          report l (`Unmatched_end_tag raw_name);
+          content_state ()
+        end else
           let rec pop_until_match () =
             match !open_elements with
             | (_, name, _)::_ when name = expanded_name ->
@@ -205,12 +208,12 @@ let parse context namespace report tokens =
               | _ -> content_state ())
 
             | (l', _, name)::_ ->
-              report l' (`Unmatched_start_tag name) !throw (fun () ->
-              pop l pop_until_match)
+              report l' (`Unmatched_start_tag name);
+              pop l pop_until_match
 
             | _ -> failwith "impossible"
           in
-          pop_until_match ())
+          pop_until_match ()
 
       | l, `Chars s ->
         emit l (`Text s) content_state
@@ -226,18 +229,18 @@ let parse context namespace report tokens =
           match !open_elements with
           | [] -> emit_end ()
           | (l', _, raw_name)::_ ->
-            report l' (`Unmatched_start_tag raw_name) !throw (fun () ->
-            pop l pop_stack)
+            report l' (`Unmatched_start_tag raw_name);
+            pop l pop_stack
         in
         pop_stack ()
 
       | l, `Xml _ ->
-        report l (`Bad_document "XML declaration should be at top level") !throw
-          content_state
+        report l (`Bad_document "XML declaration should be at top level");
+        content_state ()
 
       | l, `Doctype _ ->
-        report l (`Bad_document "doctype should be at top level") !throw
-          content_state
+        report l (`Bad_document "doctype should be at top level");
+        content_state ()
     end
 
   in

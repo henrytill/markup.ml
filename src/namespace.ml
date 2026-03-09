@@ -3,15 +3,6 @@
 
 open Common
 
-let list_map_cps : ('a -> 'b cps) -> 'a list -> 'b list cps =
-    fun f l throw k ->
-
-  let rec loop accumulator = function
-    | [] -> k (List.rev accumulator)
-    | x::l -> f x throw (fun x' -> loop (x'::accumulator) l)
-  in
-  loop [] l
-
 module Parsing =
 struct
   type context_entry =
@@ -44,15 +35,16 @@ struct
     let rec entry = {f; previous = entry} in
     ref entry
 
-  let expand_element report context raw_element_name throw k =
+  let expand_element report context raw_element_name =
     let ns, name = parse raw_element_name in
     match !context.f ns with
-    | Some uri -> k (uri, name)
+    | Some uri -> (uri, name)
     | None ->
       match ns with
-      | "" -> k ("", name)
+      | "" -> ("", name)
       | prefix ->
-        report () (`Bad_namespace prefix) throw (fun () -> k (prefix, name))
+        report () (`Bad_namespace prefix);
+        (prefix, name)
 
   let push report context raw_element_name raw_attributes throw k =
     let parsed_attributes =
@@ -71,19 +63,22 @@ struct
     let entry = {f; previous = !context} in
     context := entry;
 
-    expand_element report context raw_element_name throw
-      (fun expanded_element_name ->
-    list_map_cps begin fun (name, value) _ k ->
-      match name with
-      | "", "xmlns" -> k ((xmlns_ns, "xmlns"), value)
-      | "", name -> k (("", name), value)
-      | ns, name ->
-        match f ns with
-        | Some uri -> k ((uri, name), value)
-        | None ->
-          report () (`Bad_namespace ns) throw (fun () -> k ((ns, name), value))
-    end parsed_attributes throw (fun expanded_attributes ->
-    k (expanded_element_name, expanded_attributes)))
+    let expanded_element_name = expand_element report context raw_element_name in
+    let expanded_attributes =
+      parsed_attributes |> List.map begin fun (name, value) ->
+        match name with
+        | "", "xmlns" -> ((xmlns_ns, "xmlns"), value)
+        | "", name -> (("", name), value)
+        | ns, name ->
+          match f ns with
+          | Some uri -> ((uri, name), value)
+          | None ->
+            report () (`Bad_namespace ns);
+            ((ns, name), value)
+      end
+    in
+    ignore throw;
+    k (expanded_element_name, expanded_attributes)
 
   let pop ({contents = {previous}} as context) =
     context := previous
@@ -151,8 +146,9 @@ struct
           else Some prefix
     in
 
+    ignore throw;
     match prefix with
-    | None -> report () (`Bad_namespace namespace) throw (fun () -> k "")
+    | None -> report () (`Bad_namespace namespace); k ""
     | Some prefix -> k prefix
 
   let format prefix name =
@@ -198,9 +194,13 @@ struct
     (fst context) := entry;
 
     unexpand_element report context element_name throw (fun element_name ->
-    list_map_cps (unexpand_attribute report context) attributes throw
-      (fun attributes ->
-    k (element_name, attributes)))
+    let rec map_attrs acc = function
+      | [] -> k (element_name, List.rev acc)
+      | attr::rest ->
+        unexpand_attribute report context attr throw (fun a ->
+          map_attrs (a::acc) rest)
+    in
+    map_attrs [] attributes)
 
   let pop ({contents = {previous}}, _ as context) =
     (fst context) := previous

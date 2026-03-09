@@ -1022,9 +1022,11 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
   let report_if = Error.report_if report in
   let unmatched_end_tag l name k =
-    report l (`Unmatched_end_tag name) !throw k in
+    report l (`Unmatched_end_tag name) ;
+    k () in
   let misnested_tag l t context_name k =
-    report l (`Misnested_tag (t.name, context_name, t.Token_tag.attributes)) !throw k in
+    report l (`Misnested_tag (t.name, context_name, t.Token_tag.attributes)) ;
+    k () in
 
   let open_elements = Stack.create () in
   let active_formatting_elements = Active.create () in
@@ -1045,8 +1047,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       | [] -> k ()
       | {element_name = ns, name; location}::more ->
         report_if (not (ns = `HTML && list_mem_string name names))
-          location (fun () -> `Unmatched_start_tag name) !throw (fun () ->
-        iterate more)
+          location (fun () -> `Unmatched_start_tag name) ;
+iterate more
     in
     iterate !open_elements
   in
@@ -1175,8 +1177,7 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       ({Token_tag.name; attributes; self_closing} as tag) mode =
 
     report_if (self_closing && not acknowledge) location (fun () ->
-      `Bad_token ("/>", "tag", "should not be self-closing"))
-      !throw (fun () ->
+      `Bad_token ("/>", "tag", "should not be self-closing"));
 
     let namespace_string = Ns.to_string namespace in
 
@@ -1212,7 +1213,7 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
           !active_formatting_elements;
 
     emit location
-      (`Start_element ((namespace_string, tag_name), attributes)) mode)
+      (`Start_element ((namespace_string, tag_name), attributes)) mode
 
   and push_implicit location name mode =
     push_and_emit location
@@ -1254,9 +1255,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       | [] -> mode ()
       | {element_name = ns, name}::_ ->
         if ns = `HTML && list_mem_string name names then pop location mode
-        else
-          report location (`Unmatched_start_tag name) !throw (fun () ->
-          pop location iterate)
+        else begin
+          report location (`Unmatched_start_tag name);
+          pop location iterate
+        end
     in
     iterate ()
 
@@ -1289,7 +1291,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       match Stack.current_element open_elements with
       | Some {element_name = `HTML, name'} when name' = name -> k ()
       | Some {element_name = _, name; location} ->
-        report location (`Unmatched_start_tag name) !throw k
+        report location (`Unmatched_start_tag name) ;
+        k ()
       | None ->
         unmatched_end_tag location name k
     in
@@ -1403,8 +1406,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
   and before_html_mode () =
     dispatch tokens begin function
       | l, `Doctype _ ->
-        report l (`Bad_document "doctype should be first") !throw
-          before_html_mode
+        report l (`Bad_document "doctype should be first") ;
+          before_html_mode ()
 
       | l, `Comment s ->
         emit l (`Comment s) before_html_mode
@@ -1434,8 +1437,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         emit l (`Comment s) before_head_mode
 
       | l, `Doctype _ ->
-        report l (`Bad_document "doctype should be first") !throw
-          before_head_mode
+        report l (`Bad_document "doctype should be first") ;
+          before_head_mode ()
 
       | _, `Start {name = "html"} as v ->
         in_body_mode_rules "html" before_head_mode v
@@ -1446,7 +1449,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
       | l, `End {name}
           when not @@ list_mem_string name ["head"; "body"; "html"; "br"] ->
-        report l (`Unmatched_end_tag name) !throw before_head_mode
+        report l (`Unmatched_end_tag name) ;
+        before_head_mode ()
 
       | l, _ as v ->
         head_seen := true;
@@ -1468,7 +1472,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       emit l (`Comment s) mode
 
     | l, `Doctype _ ->
-      report l (`Bad_document "doctype should be first") !throw mode
+      report l (`Bad_document "doctype should be first") ;
+      mode ()
 
     | _, `Start {name = "html"} as v ->
       in_body_mode_rules "head" in_head_mode v
@@ -1504,9 +1509,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       push_and_emit l t in_template_mode
 
     | l, `End {name = "template"} ->
-      if not @@ Stack.has open_elements "template" then
-        report l (`Unmatched_end_tag "template") !throw mode
-      else begin
+      if not @@ Stack.has open_elements "template" then begin
+        report l (`Unmatched_end_tag "template");
+        mode ()
+      end else begin
         Active.clear_until_marker active_formatting_elements;
         Template.pop template_insertion_modes;
         close_element_with_implied "template" l (fun () -> reset_mode () ())
@@ -1516,7 +1522,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       misnested_tag l t "head" mode
 
     | l, `End {name} when not @@ list_mem_string name ["body"; "html"; "br"] ->
-      report l (`Unmatched_end_tag name) !throw mode
+      report l (`Unmatched_end_tag name) ;
+      mode ()
 
     | l, _ as v ->
       push tokens v;
@@ -1526,8 +1533,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
   and in_head_noscript_mode () =
     dispatch tokens begin function
       | l, `Doctype _ ->
-        report l (`Bad_document "doctype should be first") !throw
-          in_head_noscript_mode
+        report l (`Bad_document "doctype should be first") ;
+          in_head_noscript_mode ()
 
       | _, `Start {name = "html"} as v ->
         in_body_mode_rules "noscript" in_head_noscript_mode v
@@ -1546,12 +1553,13 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         misnested_tag l t "noscript" in_head_noscript_mode
 
       | l, `End {name} when name <> "br" ->
-        report l (`Unmatched_end_tag name) !throw in_head_noscript_mode
+        report l (`Unmatched_end_tag name) ;
+        in_head_noscript_mode ()
 
       | l, _ as v ->
-        report l (`Bad_content "noscript") !throw (fun () ->
-        push tokens v;
-        pop l in_head_mode)
+        report l (`Bad_content "noscript") ;
+push tokens v;
+        pop l in_head_mode
     end
 
   (* 8.2.5.4.6. *)
@@ -1565,8 +1573,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         emit l (`Comment s) after_head_mode
 
       | l, `Doctype _ ->
-        report l (`Bad_document "doctype should be first") !throw
-          after_head_mode
+        report l (`Bad_document "doctype should be first") ;
+          after_head_mode ()
 
       | _, `Start {name = "html"} as v ->
         in_body_mode_rules "html" after_head_mode v
@@ -1588,12 +1596,13 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         in_head_mode_rules after_head_mode v
 
       | l, `Start {name = "head"} ->
-        report l (`Bad_document "duplicate head element") !throw
-          after_head_mode
+        report l (`Bad_document "duplicate head element") ;
+          after_head_mode ()
 
       | l, `End {name}
           when not @@ list_mem_string name ["body"; "html"; "br"] ->
-        report l (`Unmatched_end_tag name) !throw after_head_mode
+        report l (`Unmatched_end_tag name) ;
+        after_head_mode ()
 
       (* This case is not found in the specification. It is a deliberate
          deviation from conformance, so that fragments "<head>...</head>" don't
@@ -1615,7 +1624,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
   (* 8.2.5.4.7. *)
   and in_body_mode_rules context_name mode = function
     | l, `Char 0 ->
-      report l (`Bad_token ("U+0000", "body", "null")) !throw mode
+      report l (`Bad_token ("U+0000", "body", "null")) ;
+      mode ()
 
     | l, `Char (0x0009 | 0x000A | 0x000C | 0x000D | 0x0020 as c) ->
       reconstruct_active_formatting_elements (fun () ->
@@ -1632,7 +1642,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       emit l (`Comment s) mode
 
     | l, `Doctype _ ->
-      report l (`Bad_document "doctype should be first") !throw mode
+      report l (`Bad_document "doctype should be first") ;
+      mode ()
 
     | l, `Start ({name = "html"} as t) ->
       misnested_tag l t context_name mode
@@ -1676,9 +1687,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       | _ -> in_template_mode_rules mode v)
 
     | l, `End {name = "body"} ->
-      if not @@ Stack.in_scope open_elements "body" then
-        report l (`Unmatched_end_tag "body") !throw mode
-      else
+      if not @@ Stack.in_scope open_elements "body" then begin
+        report l (`Unmatched_end_tag "body");
+        mode ()
+      end else
         report_if_stack_has_other_than
           ["dd"; "dt"; "li"; "optgroup"; "option"; "p"; "rb"; "rp"; "rt";
            "rtc"; "tbody"; "td"; "tfoot"; "th"; "thead"; "tr"; "body";
@@ -1686,9 +1698,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         after_body_mode ())
 
     | l, `End {name = "html"} as v ->
-      if not @@ Stack.in_scope open_elements "body" then
-        report l (`Unmatched_end_tag "html") !throw mode
-      else
+      if not @@ Stack.in_scope open_elements "body" then begin
+        report l (`Unmatched_end_tag "html");
+        mode ()
+      end else
         report_if_stack_has_other_than
           ["dd"; "dt"; "li"; "optgroup"; "option"; "p"; "rb"; "rp"; "rt";
            "rtc"; "tbody"; "td"; "tfoot"; "th"; "thead"; "tr"; "body";
@@ -1770,9 +1783,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         "figcaption" | "figure" | "footer" | "header" | "hgroup" | "listing" |
         "main" | "nav" | "ol" | "pre" | "section" | "summary" | "ul"
         as name} ->
-      if not @@ Stack.in_scope open_elements name then
-        report l (`Unmatched_end_tag name) !throw mode
-      else
+      if not @@ Stack.in_scope open_elements name then begin
+        report l (`Unmatched_end_tag name);
+        mode ()
+      end else
         close_element_with_implied name l mode
 
     | l, `End {name = "form"} ->
@@ -1786,44 +1800,48 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
           | Some element' when element' == element ->
             pop l mode
           | _ ->
-            report element.location (`Unmatched_start_tag "form") !throw
-              (fun () ->
-            pop_until (fun element' -> element' == element) l (fun () ->
-            pop l mode)))
+            report element.location (`Unmatched_start_tag "form") ;
+pop_until (fun element' -> element' == element) l (fun () ->
+            pop l mode))
         | _ ->
-          report l (`Unmatched_end_tag "form") !throw mode
+          report l (`Unmatched_end_tag "form") ;
+          mode ()
       end
       else
-        if not @@ Stack.in_scope open_elements "form" then
-          report l (`Unmatched_end_tag "form") !throw mode
-        else
+        if not @@ Stack.in_scope open_elements "form" then begin
+          report l (`Unmatched_end_tag "form");
+          mode ()
+        end else
           close_element_with_implied "form" l mode
 
     | l, `End {name = "p"} ->
       (fun mode' ->
-        if not @@ Stack.in_button_scope open_elements "p" then
-          report l (`Unmatched_end_tag "p") !throw (fun () ->
-          push_implicit l "p" mode')
-        else mode' ())
+        if not @@ Stack.in_button_scope open_elements "p" then begin
+          report l (`Unmatched_end_tag "p");
+push_implicit l "p" mode'
+        end else mode' ())
       (fun () -> close_element_with_implied "p" l mode)
 
     | l, `End {name = "li"} ->
-      if not @@ Stack.in_list_item_scope open_elements "li" then
-        report l (`Unmatched_end_tag "li") !throw mode
-      else
+      if not @@ Stack.in_list_item_scope open_elements "li" then begin
+        report l (`Unmatched_end_tag "li");
+        mode ()
+      end else
         close_element_with_implied "li" l mode
 
     | l, `End {name = "dd" | "dt" as name} ->
-      if not @@ Stack.in_scope open_elements name then
-        report l (`Unmatched_end_tag name) !throw mode
-      else
+      if not @@ Stack.in_scope open_elements name then begin
+        report l (`Unmatched_end_tag name);
+        mode ()
+      end else
         close_element_with_implied name l mode
 
     | l, `End {name = "h1" | "h2" | "h3" | "h4" | "h5" | "h6" as name} ->
       if not @@ Stack.one_in_scope open_elements
-          ["h1"; "h2"; "h3"; "h4"; "h5"; "h6"] then
-        report l (`Unmatched_end_tag name) !throw mode
-      else
+          ["h1"; "h2"; "h3"; "h4"; "h5"; "h6"] then begin
+        report l (`Unmatched_end_tag name);
+        mode ()
+      end else
         pop_implied l (fun () ->
           (fun next ->
             match Stack.current_element open_elements with
@@ -1832,7 +1850,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
                   name' ["h1"; "h2"; "h3"; "h4"; "h5"; "h6"] ->
               next ()
             | _ ->
-              report l (`Unmatched_end_tag name) !throw next)
+              report l (`Unmatched_end_tag name) ;
+              next ())
           @@ (fun () ->
             pop_until_and_raise_errors
               ["h1"; "h2"; "h3"; "h4"; "h5"; "h6"] l mode))
@@ -1882,9 +1901,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       push_and_emit l t mode)
 
     | l, `End {name = "applet" | "marquee" | "object" as name} ->
-      if not @@ Stack.in_scope open_elements name then
-        report l (`Unmatched_end_tag name) !throw mode
-      else begin
+      if not @@ Stack.in_scope open_elements name then begin
+        report l (`Unmatched_end_tag name);
+        mode ()
+      end else begin
         Active.clear_until_marker active_formatting_elements;
         close_element_with_implied name l mode
       end
@@ -1895,10 +1915,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       push_and_emit l t in_table_mode)
 
     | l, `End {name = "br"} ->
-      report l (`Unmatched_end_tag "br") !throw (fun () ->
-      in_body_mode_rules context_name mode
+      report l (`Unmatched_end_tag "br") ;
+in_body_mode_rules context_name mode
         (l, `Start
-          {Token_tag.name = "br"; attributes = []; self_closing = false}))
+          {Token_tag.name = "br"; attributes = []; self_closing = false})
 
     | l, `Start ({name =
         "area" | "br" | "embed" | "img" | "keygen" | "wbr"} as t) ->
@@ -1924,10 +1944,9 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       pop l mode))
 
     | l, `Start ({name = "image"} as t) ->
-      report l (`Bad_token ("image", "tag", "should be 'img'")) !throw
-        (fun () ->
-      push tokens (l, `Start {t with name = "img"});
-      mode ())
+      report l (`Bad_token ("image", "tag", "should be 'img'")) ;
+push tokens (l, `Start {t with name = "img"});
+      mode ()
 
     | l, `Start ({name = "textarea"} as t) ->
       frameset_ok := false;
@@ -2030,9 +2049,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
           pop_implied ~except:name l (fun () ->
           pop l mode)
         else
-          if Element.is_special name'' then
-            report l (`Unmatched_end_tag name) !throw mode
-          else close rest
+          if Element.is_special name'' then begin
+            report l (`Unmatched_end_tag name);
+            mode ()
+          end else close rest
     in
     close !open_elements
 
@@ -2048,7 +2068,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       match errors with
       | [] -> k ()
       | (l, error)::more ->
-        report l error !throw (fun () -> report_all more k)
+        report l error ;
+report_all more k
     in
     report_all errors (fun () ->
     if not handled then any_other_end_tag_in_body l name mode
@@ -2068,9 +2089,9 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         text_mode original_mode
 
       | l, `EOF as v ->
-        report l (`Unexpected_eoi "content") !throw (fun () ->
-        push tokens v;
-        pop l original_mode)
+        report l (`Unexpected_eoi "content") ;
+push tokens v;
+        pop l original_mode
 
       | l, `End _ ->
         pop l original_mode
@@ -2090,8 +2111,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
     text_mode original_mode
 
   and anything_else_in_table mode (l, _ as v) =
-    report l (`Bad_content "table") !throw (fun () ->
-    in_body_mode_rules "table" mode v)
+    report l (`Bad_content "table") ;
+in_body_mode_rules "table" mode v
 
   (* 8.2.5.4.9. *)
   and in_table_mode () =
@@ -2108,7 +2129,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       emit l (`Comment s) mode
 
     | l, `Doctype _ ->
-      report l (`Bad_document "doctype should be first") !throw mode
+      report l (`Bad_document "doctype should be first") ;
+      mode ()
 
     | l, `Start ({name = "caption"} as t) ->
       pop_to_table_context l (fun () ->
@@ -2142,15 +2164,17 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       end)
 
     | l, `End {name = "table"} ->
-      if not @@ Stack.in_table_scope open_elements "table" then
-        report l (`Unmatched_end_tag "table") !throw mode
-      else
+      if not @@ Stack.in_table_scope open_elements "table" then begin
+        report l (`Unmatched_end_tag "table");
+        mode ()
+      end else
         close_element l "table" (fun () -> reset_mode () ())
 
     | l, `End {name =
       "body" | "caption" | "col" | "colgroup" | "html" | "tbody" | "td" |
       "tfoot" | "th" | "thead" | "tr" as name} ->
-      report l (`Unmatched_end_tag name) !throw mode
+      report l (`Unmatched_end_tag name) ;
+      mode ()
 
     | _, `Start {name = "style" | "script" | "template"}
     | _, `End {name = "template"} as v ->
@@ -2176,8 +2200,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
   and in_table_text_mode only_space cs mode =
     dispatch tokens begin function
       | l, `Char 0 ->
-        report l (`Bad_token ("U+0000", "table", "null")) !throw (fun () ->
-        in_table_text_mode only_space cs mode)
+        report l (`Bad_token ("U+0000", "table", "null")) ;
+in_table_text_mode only_space cs mode
 
       | _, `Char (0x0009 | 0x000A | 0x000C | 0x000D | 0x0020) as v ->
         in_table_text_mode only_space (v::cs) mode
@@ -2205,9 +2229,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
   and in_caption_mode () =
     dispatch tokens begin function
       | l, `End {name = "caption"} ->
-        if not @@ Stack.in_table_scope open_elements "caption" then
-          report l (`Unmatched_end_tag "caption") !throw in_caption_mode
-        else begin
+        if not @@ Stack.in_table_scope open_elements "caption" then begin
+          report l (`Unmatched_end_tag "caption");
+          in_caption_mode ()
+        end else begin
           Active.clear_until_marker active_formatting_elements;
           close_element_with_implied "caption" l in_table_mode
         end
@@ -2225,19 +2250,20 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         end)
 
       | l, `End {name = "table"} as v ->
-        report l (`Unmatched_end_tag "table") !throw (fun () ->
-        if not @@ Stack.in_table_scope open_elements "caption" then
+        report l (`Unmatched_end_tag "table") ;
+if not @@ Stack.in_table_scope open_elements "caption" then
           in_caption_mode ()
         else begin
           Active.clear_until_marker active_formatting_elements;
           push tokens v;
           close_element l "caption" in_table_mode
-        end)
+        end
 
       | l, `End {name =
           ("body" | "col" | "colgroup" | "html" | "tbody" | "td" | "tfoot" |
            "th" | "thead" | "tr") as name} ->
-        report l (`Unmatched_end_tag name) !throw in_caption_mode
+        report l (`Unmatched_end_tag name) ;
+        in_caption_mode ()
 
       | l, `Start ({name = "select"} as t) ->
         select_in_body l t in_select_in_table_mode
@@ -2257,8 +2283,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         emit l (`Comment s) in_column_group_mode
 
       | l, `Doctype _ ->
-        report l (`Bad_document "doctype should be first") !throw
-          in_column_group_mode
+        report l (`Bad_document "doctype should be first") ;
+          in_column_group_mode ()
 
       | _, `Start {name = "html"} as v ->
         in_body_mode_rules "colgroup" in_column_group_mode v
@@ -2268,13 +2294,15 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         pop l in_column_group_mode)
 
       | l, `End {name = "colgroup"} ->
-        if not @@ Stack.current_element_is open_elements ["colgroup"] then
-          report l (`Unmatched_end_tag "colgroup") !throw in_column_group_mode
-        else
+        if not @@ Stack.current_element_is open_elements ["colgroup"] then begin
+          report l (`Unmatched_end_tag "colgroup");
+          in_column_group_mode ()
+        end else
           pop l in_table_mode
 
       | l, `End {name = "col"} ->
-        report l (`Unmatched_end_tag "col") !throw in_column_group_mode
+        report l (`Unmatched_end_tag "col") ;
+        in_column_group_mode ()
 
       | _, `Start {name = "template"}
       | _, `End {name = "template"} as v ->
@@ -2284,9 +2312,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         in_body_mode_rules "colgroup" in_column_group_mode v
 
       | l, _ as v ->
-        if not @@ Stack.current_element_is open_elements ["colgroup"] then
-          report l (`Bad_content "colgroup") !throw in_table_mode
-        else begin
+        if not @@ Stack.current_element_is open_elements ["colgroup"] then begin
+          report l (`Bad_content "colgroup");
+          in_table_mode ()
+        end else begin
           push tokens v;
           pop l in_table_mode
         end
@@ -2306,9 +2335,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         push_implicit l "tr" in_row_mode))
 
       | l, `End {name = "tbody" | "tfoot" | "thead" as name} ->
-        if not @@ Stack.in_table_scope open_elements name then
-          report l (`Unmatched_end_tag name) !throw in_table_body_mode
-        else
+        if not @@ Stack.in_table_scope open_elements name then begin
+          report l (`Unmatched_end_tag name);
+          in_table_body_mode ()
+        end else
           pop_to_table_body_context l (fun () ->
           pop l in_table_mode)
 
@@ -2326,9 +2356,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
       | l, `End {name = "table" as name} as v ->
         if not @@ Stack.one_in_table_scope open_elements
-            ["tbody"; "thead"; "tfoot"] then
-          report l (`Unmatched_end_tag name) !throw in_table_body_mode
-        else begin
+            ["tbody"; "thead"; "tfoot"] then begin
+          report l (`Unmatched_end_tag name);
+          in_table_body_mode ()
+        end else begin
           push tokens v;
           pop_to_table_body_context l (fun () ->
           pop l in_table_mode)
@@ -2337,7 +2368,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       | l, `End {name =
           "body" | "caption" | "col" | "colgroup" | "html" | "td" | "th" |
           "tr" as name} ->
-        report l (`Unmatched_end_tag name) !throw in_table_body_mode
+        report l (`Unmatched_end_tag name) ;
+        in_table_body_mode ()
 
       | v ->
         in_table_mode_rules in_table_body_mode v
@@ -2352,9 +2384,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         push_and_emit l t in_cell_mode)
 
       | l, `End {name = "tr"} ->
-        if not @@ Stack.in_table_scope open_elements "tr" then
-          report l (`Unmatched_end_tag "tr") !throw in_row_mode
-        else
+        if not @@ Stack.in_table_scope open_elements "tr" then begin
+          report l (`Unmatched_end_tag "tr");
+          in_row_mode ()
+        end else
           pop_to_table_row_context l (fun () ->
           pop l in_table_body_mode)
 
@@ -2362,21 +2395,23 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
           ("caption" | "col" | "colgroup" | "tbody" | "tfoot" | "thead" |
            "tr")}
       | l, `End {name = "table"} as v ->
-        if not @@ Stack.in_table_scope open_elements "tr" then
+        if not @@ Stack.in_table_scope open_elements "tr" then begin
           match snd v with
           | `Start t ->
             misnested_tag l t "tr" in_row_mode
           | `End {name} ->
-            report l (`Unmatched_end_tag name) !throw in_row_mode
-        else
+            report l (`Unmatched_end_tag name);
+            in_row_mode ()
+        end else
           pop_to_table_row_context l (fun () ->
           push tokens v;
           pop l in_table_body_mode)
 
       | l, `End {name = "tbody" | "tfoot" | "thead" as name} as v ->
-        if not @@ Stack.in_table_scope open_elements name then
-          report l (`Unmatched_end_tag name) !throw in_row_mode
-        else
+        if not @@ Stack.in_table_scope open_elements name then begin
+          report l (`Unmatched_end_tag name);
+          in_row_mode ()
+        end else
           if not @@ Stack.in_table_scope open_elements "tr" then in_row_mode ()
           else
             pop_to_table_row_context l (fun () ->
@@ -2386,7 +2421,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       | l, `End {name =
           "body" | "caption" | "col" | "colgroup" | "html" | "td" | "th"
           as name} ->
-        report l (`Unmatched_end_tag name) !throw in_row_mode
+        report l (`Unmatched_end_tag name) ;
+        in_row_mode ()
 
       | v ->
         in_table_mode_rules in_row_mode v
@@ -2396,9 +2432,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
   and in_cell_mode () =
     dispatch tokens begin function
       | l, `End {name = "td" | "th" as name} ->
-        if not @@ Stack.in_table_scope open_elements name then
-          report l (`Unmatched_end_tag name) !throw in_cell_mode
-        else
+        if not @@ Stack.in_table_scope open_elements name then begin
+          report l (`Unmatched_end_tag name);
+          in_cell_mode ()
+        end else
           close_element_with_implied name l (fun () ->
           Active.clear_until_marker active_formatting_elements;
           in_row_mode ())
@@ -2416,13 +2453,15 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
       | l, `End {name =
           "body" | "caption" | "col" | "colgroup" | "html" as name} ->
-        report l (`Unmatched_end_tag name) !throw in_cell_mode
+        report l (`Unmatched_end_tag name) ;
+        in_cell_mode ()
 
       | l, `End {name =
           "table" | "tbody" | "tfoot" | "thead" | "tr" as name} as v ->
-        if not @@ Stack.in_table_scope open_elements name then
-          report l (`Unmatched_end_tag name) !throw in_cell_mode
-        else
+        if not @@ Stack.in_table_scope open_elements name then begin
+          report l (`Unmatched_end_tag name);
+          in_cell_mode ()
+        end else
           close_cell l (fun () ->
           Active.clear_until_marker active_formatting_elements;
           push tokens v;
@@ -2441,7 +2480,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
   and in_select_mode_rules mode = function
     | l, `Char 0 ->
-      report l (`Bad_token ("U+0000", "select", "null")) !throw mode
+      report l (`Bad_token ("U+0000", "select", "null")) ;
+      mode ()
 
     | l, `Char c ->
       add_character l c;
@@ -2451,7 +2491,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       emit l (`Comment s) mode
 
     | l, `Doctype _ ->
-      report l (`Bad_document "doctype should be first") !throw mode
+      report l (`Bad_document "doctype should be first") ;
+      mode ()
 
     | _, `Start {name = "html"} as v ->
       in_body_mode_rules "select" mode v
@@ -2481,19 +2522,24 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       (fun () ->
         if Stack.current_element_is open_elements ["optgroup"] then
           pop l mode
-        else
-          report l (`Unmatched_end_tag "optgroup") !throw mode)
+        else begin
+          report l (`Unmatched_end_tag "optgroup");
+          mode ()
+        end)
 
     | l, `End {name = "option"} ->
       if Stack.current_element_is open_elements ["option"] then
         pop l mode
-      else
-        report l (`Unmatched_end_tag "option") !throw mode
+      else begin
+        report l (`Unmatched_end_tag "option");
+        mode ()
+      end
 
     | l, `End {name = "select"} ->
-      if not @@ Stack.in_select_scope open_elements "select" then
-        report l (`Unmatched_end_tag "select") !throw mode
-      else
+      if not @@ Stack.in_select_scope open_elements "select" then begin
+        report l (`Unmatched_end_tag "select");
+        mode ()
+      end else
         close_element l "select" (fun () -> reset_mode () ())
 
     | l, `Start ({name = "select"} as t) ->
@@ -2517,7 +2563,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       in_body_mode_rules "select" mode v
 
     | l, _ ->
-      report l (`Bad_content "select") !throw mode
+      report l (`Bad_content "select") ;
+      mode ()
 
   (* 8.2.5.4.17. *)
   and in_select_in_table_mode () =
@@ -2532,13 +2579,13 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       | l, `End {name =
           "caption" | "table" | "tbody" | "tfoot" | "thead" | "tr" | "td" |
           "th" as name} as v ->
-        report l (`Unmatched_end_tag "name") !throw (fun () ->
-        if not @@ Stack.in_table_scope open_elements name then
+        report l (`Unmatched_end_tag "name") ;
+if not @@ Stack.in_table_scope open_elements name then
           in_select_in_table_mode ()
         else begin
           push tokens v;
           close_element l "select" (fun () -> reset_mode () ())
-        end)
+        end
 
       | v ->
         in_select_mode_rules in_select_in_table_mode v
@@ -2591,16 +2638,17 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       in_body_mode ()
 
     | l, `End {name} ->
-      report l (`Unmatched_end_tag name) !throw mode
+      report l (`Unmatched_end_tag name) ;
+      mode ()
 
     | l, `EOF as v ->
       if not @@ Stack.has open_elements "template" then emit_end l
       else begin
-        report l (`Unmatched_end_tag "template") !throw (fun () ->
-        Active.clear_until_marker active_formatting_elements;
+        report l (`Unmatched_end_tag "template") ;
+Active.clear_until_marker active_formatting_elements;
         Template.pop template_insertion_modes;
         push tokens v;
-        close_element l "template" (fun () -> reset_mode () ()))
+        close_element l "template" (fun () -> reset_mode () ())
       end
 
   (* 8.2.5.4.19. *)
@@ -2613,8 +2661,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         emit l (`Comment s) after_body_mode
 
       | l, `Doctype _ ->
-        report l (`Bad_document "doctype should be first") !throw
-          after_body_mode
+        report l (`Bad_document "doctype should be first") ;
+          after_body_mode ()
 
       | _, `Start {name = "html"} as v ->
         in_body_mode_rules "html" after_body_mode v
@@ -2626,9 +2674,9 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         emit_end l
 
       | l, _ as v ->
-        report l (`Bad_document "content after body") !throw (fun () ->
-        push tokens v;
-        in_body_mode ())
+        report l (`Bad_document "content after body") ;
+push tokens v;
+        in_body_mode ()
     end
 
   (* 8.2.5.4.20. *)
@@ -2642,8 +2690,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         emit l (`Comment s) in_frameset_mode
 
       | l, `Doctype _ ->
-        report l (`Bad_document "doctype should be first") !throw
-          in_frameset_mode
+        report l (`Bad_document "doctype should be first") ;
+          in_frameset_mode ()
 
       | _, `Start {name = "html"} as v ->
         in_body_mode_rules "frameset" in_frameset_mode v
@@ -2653,9 +2701,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
       | l, `End {name = "frameset"} ->
         (fun mode' ->
-          if Stack.current_element_is open_elements ["html"] then
-            report l (`Unmatched_end_tag "frameset") !throw mode'
-          else
+          if Stack.current_element_is open_elements ["html"] then begin
+            report l (`Unmatched_end_tag "frameset");
+            mode' ()
+          end else
             pop l mode')
         (fun () ->
           if Stack.current_element_is open_elements ["frameset"] then
@@ -2671,13 +2720,15 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
       | l, `EOF ->
         (fun mode' ->
-          if not @@ Stack.current_element_is open_elements ["html"] then
-            report l (`Unexpected_eoi "frameset") !throw mode'
-          else mode' ())
+          if not @@ Stack.current_element_is open_elements ["html"] then begin
+            report l (`Unexpected_eoi "frameset");
+            mode' ()
+          end else mode' ())
         (fun () -> emit_end l)
 
       | l, _ ->
-        report l (`Bad_content "frameset") !throw in_frameset_mode
+        report l (`Bad_content "frameset") ;
+        in_frameset_mode ()
     end
 
   (* 8.2.5.4.21. *)
@@ -2691,8 +2742,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         emit l (`Comment s) after_frameset_mode
 
       | l, `Doctype _ ->
-        report l (`Bad_document "doctype should be first") !throw
-          after_frameset_mode
+        report l (`Bad_document "doctype should be first") ;
+          after_frameset_mode ()
 
       | _, `Start {name = "html"} as v ->
         in_body_mode_rules "html" after_frameset_mode v
@@ -2707,7 +2758,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         emit_end l
 
       | l, _ ->
-        report l (`Bad_content "html") !throw after_frameset_mode
+        report l (`Bad_content "html") ;
+        after_frameset_mode ()
     end
 
   (* 8.2.5.4.22. *)
@@ -2726,7 +2778,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
       | l, _ as v ->
         push tokens v;
-        report l (`Bad_content "html") !throw in_body_mode
+        report l (`Bad_content "html") ;
+        in_body_mode ()
     end
 
   (* 8.2.5.4.23. *)
@@ -2747,7 +2800,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         in_head_mode_rules after_after_frameset_mode v
 
       | l, _ ->
-        report l (`Bad_content "html") !throw after_after_frameset_mode
+        report l (`Bad_content "html") ;
+        after_after_frameset_mode ()
     end
 
   (* 8.2.5.5. *)
@@ -2770,10 +2824,9 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
   and foreign_content mode force_html v =
     match v with
     | l, `Char 0 ->
-      report l (`Bad_token ("U+0000", "foreign content", "null")) !throw
-        (fun () ->
-      add_character l u_rep;
-      mode ())
+      report l (`Bad_token ("U+0000", "foreign content", "null")) ;
+add_character l u_rep;
+      mode ()
 
     | l, `Char (0x0009 | 0x000A | 0x000C | 0x000D | 0x0020 as c) ->
       add_character l c;
@@ -2788,7 +2841,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       emit l (`Comment s) mode
 
     | l, `Doctype _ ->
-      report l (`Bad_document "doctype should be first") !throw mode
+      report l (`Bad_document "doctype should be first") ;
+      mode ()
 
     | l, `Start ({name =
         "b" | "big" | "blockquote" | "body" | "br" | "center" | "code" |
@@ -2826,8 +2880,8 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         | Some {element_name = _, name'} when String.lowercase_ascii name' = name ->
           mode' ()
         | _ ->
-          report l (`Unmatched_end_tag name) !throw (fun () ->
-          mode' ()))
+          report l (`Unmatched_end_tag name) ;
+mode' ())
       (fun () ->
         let rec scan = function
           | [] -> mode ()

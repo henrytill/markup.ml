@@ -248,7 +248,11 @@ end
 
 module Asynchronous (IO : IO) =
 struct
-  let wrap_report report = fun l e -> IO.to_cps (fun () -> report l e)
+  (* Convert an async report handler (returns IO.t) to a direct-style one.
+     The IO action is run synchronously via IO.to_cps with trivial continuations. *)
+  let wrap_report report =
+    fun l e ->
+      IO.to_cps (fun () -> report l e) (fun _exn -> ()) (fun () -> ())
 
   module Encoding =
   struct

@@ -70,8 +70,8 @@ let tokenize report resolve_reference (input, get_location) =
     let k s = k (Some s) in
 
     let unexpected_eoi () =
-      report (get_location ()) (`Unexpected_eoi "reference") !throw (fun () ->
-      unresolved ())
+      report (get_location ()) (`Unexpected_eoi "reference");
+unresolved ()
     in
 
     let character_reference filter notation_prefix reference_prefix =
@@ -79,12 +79,12 @@ let tokenize report resolve_reference (input, get_location) =
       let rec read () =
         next input !throw unexpected_eoi begin function
           | _, 0x003B ->
-            if Buffer.length buffer = 0 then
+            if Buffer.length buffer = 0 then begin
               report l' (`Bad_token
                 (Printf.sprintf "&#%s;" reference_prefix, "reference",
-                 "empty character reference")) !throw unresolved
-
-            else
+                 "empty character reference"));
+              unresolved ()
+            end else
               let s = Buffer.contents buffer in
               let maybe_n =
                 try Some (int_of_string (notation_prefix ^ s))
@@ -95,7 +95,8 @@ let tokenize report resolve_reference (input, get_location) =
               | None ->
                 report l' (`Bad_token
                   (Printf.sprintf "&#%s%s;" reference_prefix s, "reference",
-                   "number out of range")) !throw unresolved
+                   "number out of range"));
+                unresolved ()
 
               | Some n ->
                 let utf_8_encoded = Buffer.create 8 in
@@ -108,8 +109,8 @@ let tokenize report resolve_reference (input, get_location) =
             read ()
 
           | l, c ->
-            report l (`Bad_token (char c, "reference", "expected digit")) !throw
-              unresolved
+            report l (`Bad_token (char c, "reference", "expected digit"));
+            unresolved ()
         end
       in
       read ()
@@ -118,7 +119,8 @@ let tokenize report resolve_reference (input, get_location) =
     next input !throw unexpected_eoi begin function
       | _, 0x003B ->
         report l'
-          (`Bad_token ("&;", "reference", "empty reference")) !throw unresolved
+          (`Bad_token ("&;", "reference", "empty reference"));
+unresolved ()
 
       | _, 0x0023 ->
         next input !throw unexpected_eoi begin function
@@ -130,8 +132,8 @@ let tokenize report resolve_reference (input, get_location) =
             character_reference is_digit "" ""
 
           | l, c ->
-            report l (`Bad_token (char c, "reference", "expected digit")) !throw
-              unresolved
+            report l (`Bad_token (char c, "reference", "expected digit"));
+            unresolved ()
         end
 
       | _, c when is_name_start_char c ->
@@ -144,8 +146,8 @@ let tokenize report resolve_reference (input, get_location) =
               begin match resolve_reference s with
               | Some s -> k s
               | None ->
-                report l' (`Bad_token (s, "reference", "unknown entity")) !throw
-                  unresolved
+                report l' (`Bad_token (s, "reference", "unknown entity"));
+                unresolved ()
               end
 
             | _, c when is_name_char c ->
@@ -154,21 +156,23 @@ let tokenize report resolve_reference (input, get_location) =
 
             | l, c ->
               report l
-                (`Bad_token (char c, "reference", "invalid name character"))
-                !throw unresolved
+                (`Bad_token (char c, "reference", "invalid name character"));
+              unresolved ()
           end
         in
         read ()
 
       | l, c ->
         report l (`Bad_token (char c, "reference", "invalid start character"))
-          !throw unresolved
+         ;
+unresolved ()
     end
   in
 
   let extra_whitespace where l c k =
     report l (`Bad_token (char c, where, "whitespace not allowed here"))
-      !throw k
+     ;
+k ()
   in
 
   let rec consume_whitespace k =
@@ -191,17 +195,17 @@ let tokenize report resolve_reference (input, get_location) =
         in
 
         if !quote_opened then
-          if not !quote_closed then
-            report (get_location ()) (`Unexpected_eoi "attribute value") !throw
-              emit
-          else
+          if not !quote_closed then begin
+            report (get_location ()) (`Unexpected_eoi "attribute value");
+            emit ()
+          end else
             emit ()
         else
-          if Buffer.length value_buffer = 0 then
+          if Buffer.length value_buffer = 0 then begin
             report l (`Bad_token
-              (Buffer.contents name_buffer, "attribute", "has no value")) !throw
-              emit
-          else
+              (Buffer.contents name_buffer, "attribute", "has no value"));
+            emit ()
+          end else
             emit ()
     in
 
@@ -219,10 +223,9 @@ let tokenize report resolve_reference (input, get_location) =
       next' begin function
         | l, c ->
           report_if (not @@ is_name_start_char c) l (fun () ->
-            `Bad_token (char c, "attribute", "invalid start character"))
-            !throw (fun () ->
+            `Bad_token (char c, "attribute", "invalid start character"));
           add_utf_8 name_buffer c;
-          name_state ())
+          name_state ()
       end
 
     and name_state () =
@@ -236,10 +239,9 @@ let tokenize report resolve_reference (input, get_location) =
 
         | l, c ->
           report_if (not @@ is_name_char c) l (fun () ->
-            `Bad_token (char c, "attribute", "invalid name character"))
-            !throw (fun () ->
+            `Bad_token (char c, "attribute", "invalid name character"));
           add_utf_8 name_buffer c;
-          name_state ())
+          name_state ()
       end
 
     and equals_state () =
@@ -265,7 +267,8 @@ let tokenize report resolve_reference (input, get_location) =
         | l, c as v ->
           push input v;
           report l (`Bad_token (char c, "attribute", "unquoted value"))
-            !throw unquoted_value_state
+           ;
+unquoted_value_state ()
       end
 
     and handle_ampersand l state =
@@ -276,17 +279,15 @@ let tokenize report resolve_reference (input, get_location) =
 
         | None ->
           report l
-            (`Bad_token ("&", "attribute", "replace with '&amp;'"))
-            !throw (fun () ->
+            (`Bad_token ("&", "attribute", "replace with '&amp;'"));
           add_utf_8 value_buffer 0x0026;
-          state ())
+          state ()
       end
 
     and handle_lt l state =
-      report l (`Bad_token ("<", "attribute", "replace with '&lt;'")) !throw
-        (fun () ->
+      report l (`Bad_token ("<", "attribute", "replace with '&lt;'"));
       add_utf_8 value_buffer 0x003C;
-      state ())
+      state ()
 
     and quoted_value_state quote =
       next input !throw finish begin function
@@ -340,7 +341,8 @@ let tokenize report resolve_reference (input, get_location) =
     let next' context finish f =
       let rec initial_state () =
         next input !throw (fun () ->
-          report (get_location ()) (`Unexpected_eoi context) !throw finish)
+          report (get_location ()) (`Unexpected_eoi context);
+finish ())
         begin function
           | l, 0x003F ->
             question_mark_state l
@@ -351,7 +353,8 @@ let tokenize report resolve_reference (input, get_location) =
 
       and question_mark_state l =
         next input !throw (fun () ->
-          report (get_location ()) (`Unexpected_eoi context) !throw finish)
+          report (get_location ()) (`Unexpected_eoi context);
+finish ())
         begin function
           | _, 0x003E ->
             finish ()
@@ -373,10 +376,9 @@ let tokenize report resolve_reference (input, get_location) =
 
         | l, c ->
           report_if (not @@ is_name_start_char c) l (fun () ->
-            `Bad_token (char c, pi, "invalid start character")) !throw
-            (fun () ->
+            `Bad_token (char c, pi, "invalid start character"));
           add_utf_8 target_buffer c;
-          target_state ())
+          target_state ()
       end
 
     and target_state () =
@@ -389,10 +391,9 @@ let tokenize report resolve_reference (input, get_location) =
 
         | l, c ->
           report_if (not @@ is_name_char c) l (fun () ->
-            `Bad_token (char c, pi, "invalid name character")) !throw
-            (fun () ->
+            `Bad_token (char c, pi, "invalid name character"));
           add_utf_8 target_buffer c;
-          target_state ())
+          target_state ()
       end
 
     and text_state () =
@@ -418,10 +419,10 @@ let tokenize report resolve_reference (input, get_location) =
       end
 
     and finish_pi () =
-      if Buffer.length target_buffer = 0 then
-        report l (`Bad_token ("<?...", pi, "empty")) !throw (fun () ->
-        k None)
-      else
+      if Buffer.length target_buffer = 0 then begin
+        report l (`Bad_token ("<?...", pi, "empty"));
+        k None
+      end else
         if String.lowercase_ascii (Buffer.contents target_buffer) = "xml" then
           finish_xml ()
         else
@@ -448,24 +449,23 @@ let tokenize report resolve_reference (input, get_location) =
       let rec check_name attributes =
         let target = Buffer.contents target_buffer in
         report_if (target <> "xml") l (fun () ->
-          `Bad_token (target, xml, "must be 'xml'")) !throw (fun () ->
-        version_state attributes)
+          `Bad_token (target, xml, "must be 'xml'"));
+        version_state attributes
 
       and version_state attributes =
         match split (matches "version") attributes with
         | None ->
-          report l (`Bad_token ("<?xml...", xml, "missing version")) !throw
-            (fun () ->
-          encoding_state "1.0" attributes)
+          report l (`Bad_token ("<?xml...", xml, "missing version"));
+          encoding_state "1.0" attributes
 
         | Some (prefix, (l, name, value), suffix) ->
           report_if (name <> "version") l (fun () ->
-            `Bad_token (name, xml, "must be 'version'")) !throw (fun () ->
+            `Bad_token (name, xml, "must be 'version'"));
           report_if (List.length prefix <> 0) l (fun () ->
-            `Bad_token (name, xml, "must be first")) !throw (fun () ->
+            `Bad_token (name, xml, "must be first"));
           report_if (not @@ version_valid value) l (fun () ->
-            `Bad_token (value, xml, "must match 1.x")) !throw (fun () ->
-          encoding_state value (prefix @ suffix))))
+            `Bad_token (value, xml, "must match 1.x"));
+          encoding_state value (prefix @ suffix)
 
       and encoding_state version attributes =
         match split (matches "encoding") attributes with
@@ -474,9 +474,9 @@ let tokenize report resolve_reference (input, get_location) =
 
         | Some (prefix, (l, name, value), suffix) ->
           report_if (name <> "encoding") l (fun () ->
-            `Bad_token (name, xml, "must be 'encoding'")) !throw (fun () ->
+            `Bad_token (name, xml, "must be 'encoding'"));
           standalone_state
-            version (Some value) (List.length prefix) (prefix @ suffix))
+            version (Some value) (List.length prefix) (prefix @ suffix)
 
       and standalone_state version encoding encoding_index attributes =
         match split (matches "standalone") attributes with
@@ -485,34 +485,28 @@ let tokenize report resolve_reference (input, get_location) =
 
         | Some (prefix, (l, name, value), suffix) ->
           report_if (name <> "standalone") l (fun () ->
-            `Bad_token (name, xml, "must be 'standalone'")) !throw (fun () ->
+            `Bad_token (name, xml, "must be 'standalone'"));
           report_if (List.length prefix < encoding_index) l (fun () ->
-            `Bad_token (name, xml, "must come after 'encoding'")) !throw
-            (fun () ->
-
-          (fun k ->
+            `Bad_token (name, xml, "must come after 'encoding'"));
+          let v =
             match value with
-            | "yes" -> k (Some true)
-            | "no" -> k (Some false)
+            | "yes" -> Some true
+            | "no" -> Some false
             | _ ->
-              report l
-                (`Bad_token (value, xml, "must be 'yes' or 'no'")) !throw
-                (fun () ->
+              report l (`Bad_token (value, xml, "must be 'yes' or 'no'"));
               match String.lowercase_ascii value with
-              | "yes" -> k (Some true)
-              | "no" -> k (Some false)
-              | _ -> k None))
-          (fun v ->
-            final_state version encoding v (prefix @ suffix))))
+              | "yes" -> Some true
+              | "no" -> Some false
+              | _ -> None
+          in
+          final_state version encoding v (prefix @ suffix)
 
       and final_state version encoding standalone attributes =
-        (fun k ->
-          match attributes with
-          | (l, name, _)::_ ->
-            report l (`Bad_token (name, xml, "not allowed here")) !throw k
-          | [] -> k ())
-        (fun () ->
-          k (Some (`Xml {version; encoding; standalone})))
+        (match attributes with
+        | (l, name, _)::_ ->
+          report l (`Bad_token (name, xml, "not allowed here"))
+        | [] -> ());
+        k (Some (`Xml {version; encoding; standalone}))
 
       in
       check_name (List.rev !attributes)
@@ -543,13 +537,11 @@ let tokenize report resolve_reference (input, get_location) =
   and emit_eoi ?during () =
     let l = get_location () in
     emit_chars (fun () ->
-      (fun k' ->
-        match during with
-        | None -> k' ()
-        | Some production ->
-          report l (`Unexpected_eoi production) !throw k')
-      (fun () ->
-        emit' l `EOF (fun () -> !ended ())))
+      (match during with
+      | None -> ()
+      | Some production ->
+        report l (`Unexpected_eoi production));
+      emit' l `EOF (fun () -> !ended ()))
 
   and emit_start l name self_closing attributes state =
     let tag = {name = name; self_closing; attributes = List.rev attributes} in
@@ -570,7 +562,8 @@ let tokenize report resolve_reference (input, get_location) =
     emit l (`Doctype doctype) s
 
   and lt_in_text l k =
-    report l (`Bad_token ("<", "text", "replace with '&lt;'")) !throw k
+    report l (`Bad_token ("<", "text", "replace with '&lt;'"));
+k ()
 
   and initial_state () =
     next input !throw (fun () -> emit_eoi ()) begin function
@@ -585,9 +578,9 @@ let tokenize report resolve_reference (input, get_location) =
         parse_reference l (function
           | None ->
             report l (`Bad_token (char c, "text", "replace with '&amp;'"))
-              !throw (fun () ->
-            add_character l c;
-            initial_state ())
+             ;
+add_character l c;
+            initial_state ()
 
           | Some s ->
             add_string l s;
@@ -613,9 +606,9 @@ let tokenize report resolve_reference (input, get_location) =
     next_option input !throw begin function
       | Some (l, (0x003E as c)) ->
         report l' (`Bad_token ("]]>", "text", "must end a CDATA section"))
-          !throw (fun () ->
-        add_character l c;
-        initial_state ())
+         ;
+add_character l c;
+        initial_state ()
 
       | Some (l, (0x005D as c)) ->
         add_character l c;
@@ -635,8 +628,8 @@ let tokenize report resolve_reference (input, get_location) =
     in
 
     next input !throw (fun () ->
-      report (get_location ()) (`Unexpected_eoi "tag") !throw
-      (fun () -> recover None))
+      report (get_location ()) (`Unexpected_eoi "tag");
+      recover None)
     begin function
       | _, 0x0021 ->
         comment_cdata_or_doctype_state l'
@@ -656,8 +649,8 @@ let tokenize report resolve_reference (input, get_location) =
 
       | l, c as v ->
         report l (`Bad_token (char c, "tag", "invalid start character"))
-          !throw (fun () ->
-        recover (Some v))
+         ;
+recover (Some v)
     end
 
   and start_tag_state l' buffer =
@@ -670,8 +663,8 @@ let tokenize report resolve_reference (input, get_location) =
     in
 
     next input !throw (fun () ->
-      report (get_location ()) (`Unexpected_eoi "tag") !throw (fun () ->
-      recover None))
+      report (get_location ()) (`Unexpected_eoi "tag");
+recover None)
     begin function
       | _, 0x003E ->
         emit_start l' (Buffer.contents buffer) false [] initial_state
@@ -688,8 +681,8 @@ let tokenize report resolve_reference (input, get_location) =
 
       | l, c as v ->
         report l (`Bad_token (char c, "tag", "invalid name character"))
-          !throw (fun () ->
-        recover (Some v))
+         ;
+recover (Some v)
     end
 
   and attributes_state l' tag_name attributes =
@@ -726,9 +719,9 @@ let tokenize report resolve_reference (input, get_location) =
 
       | v ->
         report l'' (`Bad_token (char 0x002F, "tag", "should be part of '/>'"))
-          !throw (fun () ->
-        push input v;
-        attributes_state l' name attributes)
+         ;
+push input v;
+        attributes_state l' name attributes
     end
 
   and end_tag_state l' =
@@ -741,8 +734,8 @@ let tokenize report resolve_reference (input, get_location) =
     in
 
     next input !throw (fun () ->
-      report (get_location ()) (`Unexpected_eoi "tag") !throw (fun () ->
-      recover None))
+      report (get_location ()) (`Unexpected_eoi "tag");
+recover None)
     begin function
       | _, c when is_name_start_char c ->
         let name_buffer = Buffer.create 32 in
@@ -751,8 +744,8 @@ let tokenize report resolve_reference (input, get_location) =
 
       | l, c as v ->
         report l (`Bad_token (char c, "tag", "invalid start character"))
-          !throw (fun () ->
-        recover (Some v))
+         ;
+recover (Some v)
     end
 
   and end_tag_name_state l' buffer =
@@ -766,8 +759,8 @@ let tokenize report resolve_reference (input, get_location) =
     in
 
     next input !throw (fun () ->
-      report (get_location ()) (`Unexpected_eoi "tag") !throw (fun () ->
-      recover None))
+      report (get_location ()) (`Unexpected_eoi "tag");
+recover None)
     begin function
       | _, 0x003E ->
         emit_end l' (Buffer.contents buffer) initial_state
@@ -781,15 +774,14 @@ let tokenize report resolve_reference (input, get_location) =
 
       | l, c as v ->
         report l (`Bad_token (char c, "tag", "invalid name character"))
-          !throw (fun () ->
-        recover (Some v))
+         ;
+recover (Some v)
     end
 
   and end_tag_whitespace_state reported l' name =
-    next input !throw begin fun () ->
+    next input !throw (fun () ->
       emit_end l' name (fun () ->
-      emit_eoi ~during:"tag" ())
-    end
+      emit_eoi ~during:"tag" ()))
     begin function
       | _, 0x003E ->
         emit_end l' name initial_state
@@ -798,18 +790,16 @@ let tokenize report resolve_reference (input, get_location) =
         end_tag_whitespace_state reported l' name
 
       | l, c ->
-        if not reported then
-          report l (`Bad_token (char c, "tag", "attribute in end tag"))
-            !throw (fun () ->
-          end_tag_whitespace_state true l' name)
-        else
+        if not reported then begin
+          report l (`Bad_token (char c, "tag", "attribute in end tag"));
+          end_tag_whitespace_state true l' name
+        end else
           end_tag_whitespace_state reported l' name
     end
 
   and bad_comment_start s l k' =
-    report l (`Bad_token (s, "comment", "should start with '<!--'"))
-      !throw (fun () ->
-    lt_in_text l k')
+    report l (`Bad_token (s, "comment", "should start with '<!--'"));
+    lt_in_text l k'
 
   and comment_cdata_or_doctype_state l' =
     next_option input !throw begin function
@@ -874,9 +864,11 @@ let tokenize report resolve_reference (input, get_location) =
   and comment_two_dashes_state reported l' l'' buffer =
     let recover k' =
       if reported then k' ()
-      else
+      else begin
         report l''
-          (`Bad_token ("--", "comment", "should be followed by '>'")) !throw k'
+          (`Bad_token ("--", "comment", "should be followed by '>'"));
+        k' ()
+      end
     in
 
     next input !throw (fun () -> unterminated_comment l' buffer)
@@ -905,13 +897,13 @@ let tokenize report resolve_reference (input, get_location) =
 
       | cs ->
         report l' (`Bad_token ("<![", "cdata", "should start with '<![CDATA['"))
-          !throw (fun () ->
-        lt_in_text l' (fun () ->
+         ;
+lt_in_text l' (fun () ->
         push_list input cs;
         add_character l' 0x003C;
         add_character l' 0x0021;
         add_character l' 0x005B;
-        initial_state ()))
+        initial_state ())
     end
 
   and cdata_state l' =
@@ -962,14 +954,13 @@ let tokenize report resolve_reference (input, get_location) =
 
       | cs ->
         report l'
-          (`Bad_token ("<!D", "doctype", "should start with '<!DOCTYPE '"))
-          !throw (fun () ->
+          (`Bad_token ("<!D", "doctype", "should start with '<!DOCTYPE '"));
         lt_in_text l' (fun () ->
         push_list input cs;
         add_character l' 0x003C;
         add_character l' 0x0021;
         add_character l' 0x0044;
-        initial_state ()))
+        initial_state ())
     end
 
   and unterminated_doctype l buffer =

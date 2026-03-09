@@ -70,12 +70,10 @@ let to_string ?location error =
   | None -> message
   | Some (line, column) -> fmt "line %i, column %i: %s" line column message
 
-type 'a handler = 'a -> t -> unit cps
-type parse_handler = location handler
-type write_handler = (signal * int) handler
+type parse_handler = location -> t -> unit
+type write_handler = (signal * int) -> t -> unit
 
-let ignore_errors _ _ _ resume = resume ()
+let ignore_errors _ _ = ()
 
-let report_if report condition location detail throw k =
-  if condition then report location (detail ()) throw k
-  else k ()
+let report_if report condition location detail =
+  if condition then report location (detail ())
