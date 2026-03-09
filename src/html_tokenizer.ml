@@ -323,8 +323,21 @@ let tokenize report (input, get_location) =
           iterate []
         in
 
-        let finish best matched replace =
-          push_list input (List.rev replace);
+        (* Split the first [n] elements of [all] (newest-first) into a
+           reversed prefix (oldest-first, ready for push_list) and return
+           the remaining suffix. *)
+        let rec split_rev n acc = function
+          | rest when n = 0 -> push_list input acc; rest
+          | v :: rest -> split_rev (n - 1) (v :: acc) rest
+          | [] -> push_list input acc; []
+        in
+
+        (* [all] is a newest-first list of all consumed chars.
+           [n_replace] is how many of the newest chars are in the "replace"
+           zone (always pushed back); the rest are "matched" (pushed back
+           only in the attribute-context edge cases). *)
+        let finish best n_replace all =
+          let matched = split_rev n_replace [] all in
           match best with
           | None ->
             is_entity_like (function
@@ -364,27 +377,27 @@ let tokenize report (input, get_location) =
                   | _ -> unterminated ())
         in
 
-        let rec match_named best matched replace trie text =
+        let rec match_named best n_replace all trie text =
           next_option input !throw (function
             | None ->
-              finish best matched replace
+              finish best n_replace all
             | Some ((_, c) as v) ->
               let trie = Trie.advance c trie in
               add_utf_8 text c;
               match Trie.matches trie with
               | Trie.No ->
-                finish best matched (v::replace)
+                finish best (n_replace + 1) (v :: all)
               | Trie.Prefix ->
-                match_named best matched (v::replace) trie text
+                match_named best (n_replace + 1) (v :: all) trie text
               | Trie.Multiple m ->
                 let w = Buffer.contents text in
-                match_named (Some (w, m)) (v::(replace @ matched)) [] trie text
+                match_named (Some (w, m)) 0 (v :: all) trie text
               | Trie.Yes m ->
                 let w = Buffer.contents text in
-                finish (Some (w, m)) (v::(replace @ matched)) [])
+                finish (Some (w, m)) 0 (v :: all))
         in
         match_named
-          None [] [] (Lazy.force named_entity_trie) (Buffer.create 16))
+          None 0 [] (Lazy.force named_entity_trie) (Buffer.create 16))
 
   (* 8.2.4.1. *)
   and data_state () =
