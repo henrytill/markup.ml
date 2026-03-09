@@ -14,6 +14,7 @@ let bytes_empty = Bytes.create 0
 let uutf_decoder encoding name =
   (fun report bytes ->
     let decoder = Uutf.decoder ~encoding `Manual in
+    let bytes_one = Bytes.create 1 in
 
     (fun throw empty k ->
       let rec run () =
@@ -27,7 +28,7 @@ let uutf_decoder encoding name =
         | `Await ->
           next bytes throw
             (fun () -> Uutf.Manual.src decoder bytes_empty 0 0; run ())
-            (fun c -> Uutf.Manual.src decoder (Bytes.make 1 c) 0 1; run ())
+            (fun c -> Bytes.set bytes_one 0 c; Uutf.Manual.src decoder bytes_one 0 1; run ())
       in
       run ())
     |> make)
