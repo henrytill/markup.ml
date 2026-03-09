@@ -2,40 +2,41 @@
    LICENSE.md for details, or visit https://github.com/aantron/markup.ml. *)
 
 open Common
-open Kstream
 
-type t = ?report:Error.parse_handler -> char Kstream.t -> int Kstream.t
-
-let wrap f = fun ?(report = Error.ignore_errors) s -> f report s
+(** Encoding type: takes a report handler and a byte source, returns a decoder
+    function [unit -> int] that returns Unicode codepoints or -1 at EOF. *)
+type t = report:Error.parse_handler -> byte_src:(unit -> int) -> unit -> int
 
 let bytes_empty = Bytes.create 0
 
 (* Decoders based on the Uutf library. *)
-let uutf_decoder encoding name =
-  (fun report bytes ->
+let uutf_decoder encoding name : t =
+  fun ~report ~byte_src ->
     let decoder = Uutf.decoder ~encoding `Manual in
     let bytes_one = Bytes.create 1 in
-
-    (fun throw empty k ->
-      let rec run () =
-        match Uutf.decode decoder with
-        | `End -> empty ()
-        | `Uchar c -> k (Uchar.to_int c)
-        | `Malformed s ->
-          let location = Uutf.decoder_line decoder, Uutf.decoder_col decoder in
-          report location (`Decoding_error (s, name));
-          k u_rep
-        | `Await ->
-          next bytes throw
-            (fun () -> Uutf.Manual.src decoder bytes_empty 0 0; run ())
-            (fun c -> Bytes.set bytes_one 0 c; Uutf.Manual.src decoder bytes_one 0 1; run ())
-      in
-      run ())
-    |> make)
-  |> wrap
+    let rec run () =
+      match Uutf.decode decoder with
+      | `End -> -1
+      | `Uchar c -> Uchar.to_int c
+      | `Malformed s ->
+        let location = Uutf.decoder_line decoder, Uutf.decoder_col decoder in
+        report location (`Decoding_error (s, name));
+        u_rep
+      | `Await ->
+        let b = byte_src () in
+        if b = -1 then begin
+          Uutf.Manual.src decoder bytes_empty 0 0;
+          run ()
+        end else begin
+          Bytes.set bytes_one 0 (Char.chr b);
+          Uutf.Manual.src decoder bytes_one 0 1;
+          run ()
+        end
+    in
+    run
 
 let utf_8 : t =
-  (fun report bytes ->
+  fun ~report ~byte_src ->
     let decoder = Uutf.decoder ~encoding:`UTF_8 `Manual in
     let bytes_one = Bytes.create 1 in
     let line = ref 1 in
@@ -46,36 +47,36 @@ let utf_8 : t =
       else col := !col + 1
     in
 
-    (fun throw empty k ->
-      let rec run () =
-        match Uutf.decode decoder with
-        | `End -> empty ()
-        | `Uchar c ->
-          let c = Uchar.to_int c in
-          advance c;
-          k c
-        | `Malformed s ->
-          let location = !line, !col in
-          col := !col + 1;
-          report location (`Decoding_error (s, "utf-8"));
-          k u_rep
-        | `Await ->
-          next bytes throw
-            (fun () -> Uutf.Manual.src decoder bytes_empty 0 0; run ())
-            (fun c ->
-              let i = Char.code c in
-              if i < 0x80 then begin
-                advance i;
-                k i
-              end else begin
-                Bytes.set bytes_one 0 c;
-                Uutf.Manual.src decoder bytes_one 0 1;
-                run ()
-              end)
-      in
-      run ())
-    |> make)
-  |> wrap
+    let rec run () =
+      match Uutf.decode decoder with
+      | `End -> -1
+      | `Uchar c ->
+        let c = Uchar.to_int c in
+        advance c;
+        c
+      | `Malformed s ->
+        let location = !line, !col in
+        col := !col + 1;
+        report location (`Decoding_error (s, "utf-8"));
+        u_rep
+      | `Await ->
+        let b = byte_src () in
+        if b = -1 then begin
+          Uutf.Manual.src decoder bytes_empty 0 0;
+          run ()
+        end else begin
+          if b < 0x80 then begin
+            advance b;
+            b
+          end else begin
+            Bytes.set bytes_one 0 (Char.chr b);
+            Uutf.Manual.src decoder bytes_one 0 1;
+            run ()
+          end
+        end
+    in
+    run
+
 let utf_16be : t = uutf_decoder `UTF_16BE "utf-16be"
 let utf_16le : t = uutf_decoder `UTF_16LE "utf-16le"
 let iso_8859_1 : t = uutf_decoder `ISO_8859_1 "iso-8859-1"
@@ -84,79 +85,91 @@ let us_ascii : t = uutf_decoder `US_ASCII "us-ascii"
 (* Chooses UTF-16LE unless the BE BOM is present, as in
    http://www.w3.org/TR/encoding/ *)
 let utf_16 : t =
-  (fun report bytes ->
-    let constructor =
-      fun throw k ->
-        peek_n 2 bytes throw (function
-        | ['\xFE'; '\xFF'] -> k (utf_16be ~report bytes)
-        | _ -> k (utf_16le ~report bytes))
+  fun ~report ~byte_src ->
+    let b1 = byte_src () in
+    let b2 = byte_src () in
+    (* Prepend b1, b2 back for the actual decoder via a replay wrapper *)
+    let saved = ref [b1; b2] in
+    let replay_src () =
+      match !saved with
+      | [] -> byte_src ()
+      | b :: rest -> saved := rest; b
     in
-    construct constructor)
-  |> wrap
+    if b1 = 0xFE && b2 = 0xFF then utf_16be ~report ~byte_src:replay_src
+    else utf_16le ~report ~byte_src:replay_src
 
-let ucs_4_decoder arrange name =
-  (fun report bytes ->
+let ucs_4_decoder arrange name : t =
+  fun ~report ~byte_src ->
     let first = ref true in
     let line = ref 1 in
     let column = ref 1 in
 
-    let char k c =
-      column := !column + 1;
-      k c
-    in
+    let rec run () =
+      (* Read 4 bytes *)
+      let b1 = byte_src () in
+      if b1 = -1 then -1
+      else begin
+        let b2 = byte_src () in
+        let b3 = byte_src () in
+        let b4 = byte_src () in
+        let bytes_read =
+          if b2 = -1 then [Char.chr b1]
+          else if b3 = -1 then [Char.chr b1; Char.chr b2]
+          else if b4 = -1 then [Char.chr b1; Char.chr b2; Char.chr b3]
+          else [Char.chr b1; Char.chr b2; Char.chr b3; Char.chr b4]
+        in
+        match bytes_read with
+        | [c1; c2; c3; c4] ->
+          let low, b2', b3', high = arrange (c1, c2, c3, c4) in
+          let low, b2', b3', high =
+            Char.code low, Char.code b2', Char.code b3', Char.code high in
 
-    let newline k c =
-      column := 1;
-      line := !line + 1;
-      k c
-    in
+          if high land 0x80 <> 0 then begin
+            let s = Printf.sprintf "%c%c%c%c" c1 c2 c3 c4 in
+            report (!line, !column) (`Decoding_error (s, name));
+            column := !column + 1;
+            u_rep
+          end
+          else begin
+            let scalar =
+              (high lsl 24) lor (b3' lsl 16) lor (b2' lsl 8) lor low in
 
-    (fun throw empty k ->
-      let rec run () =
-        next_n 4 bytes throw begin function
-          | [b1; b2; b3; b4] ->
-            let low, b2', b3', high = arrange (b1, b2, b3, b4) in
-            let low, b2', b3', high =
-              Char.code low, Char.code b2', Char.code b3', Char.code high in
-
-            if high land 0x80 <> 0 then begin
-              let s = Printf.sprintf "%c%c%c%c" b1 b2 b3 b4 in
-              report (!line, !column) (`Decoding_error (s, name));
-              char k u_rep
-            end
-            else
-              let scalar =
-                (high lsl 24) lor (b3' lsl 16) lor (b2' lsl 8) lor low in
-
-              let skip =
-                if !first then begin
-                  first := false;
-                  scalar = Uchar.to_int Uutf.u_bom
-                end
-                else
-                  false
-              in
-
-              if skip then run ()
+            let skip =
+              if !first then begin
+                first := false;
+                scalar = Uchar.to_int Uutf.u_bom
+              end
               else
-                if scalar = 0x000A then
-                  newline k scalar
-                else
-                  char k scalar
+                false
+            in
 
-          | [] -> empty ()
+            if skip then run ()
+            else begin
+              if scalar = 0x000A then begin
+                let result = scalar in
+                column := 1;
+                line := !line + 1;
+                result
+              end else begin
+                let result = scalar in
+                column := !column + 1;
+                result
+              end
+            end
+          end
 
-          | l ->
-            let buffer = Buffer.create 4 in
-            l |> List.iter (Buffer.add_char buffer);
-            report (!line, !column)
-              (`Decoding_error (Buffer.contents buffer, name));
-            char k u_rep
-        end
-      in
-      run ())
-    |> make)
-  |> wrap
+        | [] -> -1
+
+        | l ->
+          let buffer = Buffer.create 4 in
+          l |> List.iter (Buffer.add_char buffer);
+          report (!line, !column)
+            (`Decoding_error (Buffer.contents buffer, name));
+          column := !column + 1;
+          u_rep
+      end
+    in
+    run
 
 let ucs_4be : t =
   ucs_4_decoder (fun (b1, b2, b3, b4) -> b4, b3, b2, b1) "ucs-4be"
@@ -167,16 +180,16 @@ let ucs_4be_transposed : t =
 let ucs_4le_transposed : t =
   ucs_4_decoder (fun (b1, b2, b3, b4) -> b2, b1, b4, b3) "ucs-4le-transposed"
 
-let code_page table =
+let code_page table : t =
   if Array.length table < 256 then
     raise (Invalid_argument
       "Markup.Encoding.code_page: array does not have 256 entries");
 
-  (fun _ bytes ->
-    (fun throw empty k ->
-      next bytes throw empty (fun c -> k table.(Char.code c)))
-    |> make)
-  |> wrap
+  fun ~report:_ ~byte_src ->
+    fun () ->
+      let b = byte_src () in
+      if b = -1 then -1
+      else table.(b)
 
 let windows_1251_table = [|
     (* ASCII *)
@@ -359,3 +372,10 @@ let iso_8859_15_table = [|
   |]
 
 let iso_8859_15: t = code_page iso_8859_15_table
+
+(** Convert an encoding decoder to a kstream, for use in the internal pipeline.
+    The int kstream yields Unicode codepoints or ends when decoder returns -1. *)
+let decoder_to_kstream (dec : unit -> int) : int Kstream.t =
+  Kstream.make (fun _ e k ->
+    let v = dec () in
+    if v = -1 then e () else k v)

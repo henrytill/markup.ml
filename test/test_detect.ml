@@ -2,24 +2,27 @@
    LICENSE.md for details, or visit https://github.com/aantron/markup.ml. *)
 
 open OUnit2
-open Test_support
 
-open Markup__Kstream
 open Markup__Stream_io
 open Markup__Detect
 
-let ok = wrong_k "failed"
+(** Check that the replaying byte_src starts with the first char of s
+    (or is empty if s is empty). *)
+let _check_rewound replay_src s =
+  if String.length s > 0 then begin
+    let b = replay_src () in
+    assert_equal (Some s.[0]) (if b = -1 then None else Some (Char.chr b))
+  end else begin
+    let b = replay_src () in
+    assert_equal None (if b = -1 then None else Some (Char.chr b))
+  end
 
-let _check_rewound chars s =
-  if String.length s > 0 then
-    next_option chars ok (assert_equal (Some s.[0]))
-  else
-    next_option chars ok (assert_equal None)
-
+(** Check a BOM-guessing function (returns string option * replay_src). *)
 let _check_encoding_guess f s guess =
-  let chars = string s in
-  f chars ok (assert_equal guess);
-  _check_rewound chars s
+  let src = string s in
+  let result, replay = f src in
+  assert_equal guess result;
+  _check_rewound replay s
 
 let tests = [
   ("detect.normalize_name" >:: fun _ ->
@@ -78,9 +81,11 @@ let tests = [
 
   ("detect.meta_tag_prescan" >:: fun _ ->
     let check ?supported ?limit s result =
-      let chars = string s in
-      meta_tag_prescan ?supported ?limit chars ok (assert_equal result);
-      _check_rewound chars s
+      let src = string s in
+      let result2 = meta_tag_prescan ?supported ?limit src in
+      assert_equal result result2
+      (* Note: meta_tag_prescan does NOT rewind - it's pure consumption.
+         The rewinding is done by select_html which uses make_buffered_src. *)
     in
 
     check "" None;
@@ -161,10 +166,10 @@ let tests = [
     check "<meta charset='utf-16'>" (Some "utf-8");
 
     let no_utf_8 =
-      fun s k ->
+      fun s ->
         match s with
-        | "utf-8" -> k false
-        | _ -> k true
+        | "utf-8" -> false
+        | _ -> true
     in
 
     check ~supported:no_utf_8 "<meta charset='utf-8'>" None;
@@ -181,9 +186,9 @@ let tests = [
 
   ("detect.read_xml_encoding_declaration" >:: fun _ ->
     let check family s result =
-      let chars = string s in
-      read_xml_encoding_declaration chars family ok (assert_equal result);
-      _check_rewound chars s
+      let src = string s in
+      let result2 = read_xml_encoding_declaration src family in
+      assert_equal result result2
     in
 
     let open Markup__Encoding in

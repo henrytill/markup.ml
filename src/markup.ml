@@ -86,25 +86,42 @@ let stream_to_parser s =
     s |> Kstream.map (fun (l, v) _ k -> parser.location <- l; k v);
   parser
 
+(** Bridge: byte_src -> char kstream (for the Cps pipeline).
+    We don't need this anymore since we go byte_src -> decoder -> kstream. *)
+
+(** Bridge: decoder (unit -> int) -> int Kstream.t *)
+let decoder_to_int_kstream (dec : unit -> int) : int Kstream.t =
+  Kstream.make (fun _ e k ->
+    let v = dec () in
+    if v = -1 then e () else k v)
+
 module Cps =
 struct
   let parse_xml
       report ?encoding namespace entity context source =
-    let with_encoding (encoding : Encoding.t) k =
-      source
-      |> encoding ~report
-      |> Input.preprocess Common.is_valid_xml_char report
-      |> Xml_tokenizer.tokenize report entity
+    let byte_src () =
+      let r = ref None in
+      Kstream.next_option source raise (fun v -> r := v);
+      match !r with
+      | None -> -1
+      | Some c -> Char.code c
+    in
+
+    let with_encoding (encoding : Encoding.t) byte_src k =
+      let decoder = encoding ~report ~byte_src in
+      let int_ks = decoder_to_int_kstream decoder in
+      let processed = Input.preprocess Common.is_valid_xml_char report int_ks in
+      Xml_tokenizer.tokenize report entity processed
       |> Xml_parser.parse context namespace report
       |> k
     in
 
-    let constructor throw k =
+    let constructor _throw k =
       match encoding with
-      | Some encoding -> with_encoding encoding k
+      | Some enc -> with_encoding enc byte_src k
       | None ->
-        Detect.select_xml source throw (fun encoding ->
-        with_encoding encoding k)
+        let enc, replay = Detect.select_xml byte_src in
+        with_encoding enc replay k
     in
 
     Kstream.construct constructor
@@ -116,21 +133,29 @@ struct
     |> Utility.strings_to_bytes
 
   let parse_html report ?encoding context source =
-    let with_encoding (encoding : Encoding.t) k =
-      source
-      |> encoding ~report
-      |> Input.preprocess Common.is_valid_html_char report
-      |> Html_tokenizer.tokenize report
+    let byte_src () =
+      let r = ref None in
+      Kstream.next_option source raise (fun v -> r := v);
+      match !r with
+      | None -> -1
+      | Some c -> Char.code c
+    in
+
+    let with_encoding (encoding : Encoding.t) byte_src k =
+      let decoder = encoding ~report ~byte_src in
+      let int_ks = decoder_to_int_kstream decoder in
+      let processed = Input.preprocess Common.is_valid_html_char report int_ks in
+      Html_tokenizer.tokenize report processed
       |> Html_parser.parse context report
       |> k
     in
 
-    let constructor throw k =
+    let constructor _throw k =
       match encoding with
-      | Some encoding -> with_encoding encoding k
+      | Some enc -> with_encoding enc byte_src k
       | None ->
-        Detect.select_html source throw (fun encoding ->
-        with_encoding encoding k)
+        let enc, replay = Detect.select_html byte_src in
+        with_encoding enc replay k
     in
 
     Kstream.construct constructor
@@ -144,13 +169,44 @@ end
 
 
 
-let string = Stream_io.string
-let buffer = Stream_io.buffer
-let channel = Stream_io.channel
-let file = Stream_io.file
+let string s =
+  let src = Stream_io.string s in
+  Kstream.make (fun _ e k ->
+    let b = src () in
+    if b = -1 then e () else k (Char.chr b))
 
-let to_channel c bytes = Stream_io.to_channel c bytes |> Synchronous.of_cps
-let to_file f bytes = Stream_io.to_file f bytes |> Synchronous.of_cps
+let buffer b =
+  let src = Stream_io.buffer b in
+  Kstream.make (fun _ e k ->
+    let b = src () in
+    if b = -1 then e () else k (Char.chr b))
+
+let channel c =
+  let src = Stream_io.channel c in
+  Kstream.make (fun _ e k ->
+    let b = src () in
+    if b = -1 then e () else k (Char.chr b))
+
+let file f =
+  let src, close = Stream_io.file f in
+  let s = Kstream.make (fun _ e k ->
+    let b = src () in
+    if b = -1 then e () else k (Char.chr b))
+  in
+  s, close
+
+(** Convert a char Kstream to a pull function for use with stream_io output. *)
+let kstream_to_pull (s : char Kstream.t) : unit -> char option =
+  fun () ->
+    let r = ref None in
+    Kstream.next_option s raise (fun v -> r := v);
+    !r
+
+let to_channel c bytes =
+  Stream_io.to_channel c (kstream_to_pull bytes)
+
+let to_file f bytes =
+  Stream_io.to_file f (kstream_to_pull bytes)
 
 
 
@@ -259,7 +315,17 @@ struct
     include Encoding
 
     let decode ?(report = fun _ _ -> IO.return ()) (f : Encoding.t) s =
-      f ~report:(wrap_report report) s
+      let byte_src () =
+        let r = ref None in
+        Kstream.next_option s raise (fun v -> r := v);
+        match !r with
+        | None -> -1
+        | Some c -> Char.code c
+      in
+      let decoder = f ~report:(wrap_report report) ~byte_src in
+      Kstream.make (fun _ e k ->
+        let v = decoder () in
+        if v = -1 then e () else k v)
   end
 
   let parse_xml
@@ -291,8 +357,10 @@ struct
   let write_html ?escape_attribute ?escape_text signals =
     Cps.write_html ?escape_attribute ?escape_text signals
 
-  let to_string bytes = Stream_io.to_string bytes |> IO.of_cps
-  let to_buffer bytes = Stream_io.to_buffer bytes |> IO.of_cps
+  let to_string bytes =
+    (fun _throw k -> k (Stream_io.to_string (kstream_to_pull bytes))) |> IO.of_cps
+  let to_buffer bytes =
+    (fun _throw k -> k (Stream_io.to_buffer (kstream_to_pull bytes))) |> IO.of_cps
 
   let stream f =
     let f = IO.to_cps f in

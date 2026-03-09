@@ -21,9 +21,10 @@ let expect ?prefix ?(context = Some `Document) text signals =
   let report, iterate, ended =
     expect_signals ?prefix signal_to_string text signals in
 
-  text
-  |> Markup__Stream_io.string
-  |> Markup__Encoding.utf_8
+  let byte_src = Markup__Stream_io.string text in
+  let decoder = Markup__Encoding.utf_8 ~report:Error.ignore_errors ~byte_src in
+  let int_ks = decoder_to_int_kstream decoder in
+  int_ks
   |> Markup__Input.preprocess is_valid_html_char Error.ignore_errors
   |> Markup__Html_tokenizer.tokenize Error.ignore_errors
   |> Markup__Html_parser.parse context report

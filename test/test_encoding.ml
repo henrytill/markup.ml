@@ -11,10 +11,14 @@ open Markup__Encoding
 
 let ok = wrong_k "failed"
 
+(** Apply an encoding decoder to a byte_src, returning an int kstream. *)
+let decode enc ?(report = Markup__Error.ignore_errors) byte_src =
+  decoder_to_int_kstream (enc ~report ~byte_src)
+
 let test_ucs_4 (f : Markup__Encoding.t) name s1 s2 bad_bytes =
   expect_error (1, 2) (`Decoding_error (bad_bytes, name))
   begin fun report ->
-    let chars = s1 |> string |> f ~report in
+    let chars = decode f ~report (string s1) in
     next_option chars ok (assert_equal (Some (Char.code 'f')));
     next_option chars ok (assert_equal (Some u_rep));
     next_option chars ok (assert_equal (Some (Char.code 'o')));
@@ -24,7 +28,7 @@ let test_ucs_4 (f : Markup__Encoding.t) name s1 s2 bad_bytes =
 
   expect_error (2, 2) (`Decoding_error ("\x00\x00\x00", name))
   begin fun report ->
-    let chars = s2 |> string |> f ~report in
+    let chars = decode f ~report (string s2) in
     next_option chars ok (assert_equal (Some (Char.code 'f')));
     next_option chars ok (assert_equal (Some 0x000A));
     next_option chars ok (assert_equal (Some (Char.code 'o')));
@@ -37,7 +41,7 @@ let tests = [
   ("encoding.utf_8" >:: fun _ ->
     let s = "\xef\xbb\xbffoo\xf0\x9f\x90\x99bar\xa0more" in
     expect_error (1, 8) (`Decoding_error ("\xa0", "utf-8")) begin fun report ->
-      let chars = s |> string |> utf_8 ~report in
+      let chars = decode utf_8 ~report (string s) in
       next_n 3 chars ok (assert_equal (List.map Char.code ['f'; 'o'; 'o']));
       next_option chars ok (assert_equal (Some 0x1F419));
       next_n 3 chars ok (assert_equal (List.map Char.code ['b'; 'a'; 'r']));
@@ -52,7 +56,7 @@ let tests = [
     let s = "\xfe\xff\x00f\x00o\x00o\xd8\x3d\xdc\x19\x00b\xdc\x19\x00a\x00r" in
     expect_error (1, 6) (`Decoding_error ("\xdc\x19", "utf-16be"))
     begin fun report ->
-      let chars = s |> string |> utf_16be ~report in
+      let chars = decode utf_16be ~report (string s) in
       next_n 3 chars ok (assert_equal (List.map Char.code ['f'; 'o'; 'o']));
       next_option chars ok (assert_equal (Some 0x1F419));
       next_option chars ok (assert_equal (Some (Char.code 'b')));
@@ -66,7 +70,7 @@ let tests = [
     let s = "\xff\xfef\x00o\x00o\x00\x3d\xd8\x19\xdcb\x00\x19\xdca\x00r\x00" in
     expect_error (1, 6) (`Decoding_error ("\x19\xdc", "utf-16le"))
     begin fun report ->
-      let chars = s |> string |> utf_16le ~report in
+      let chars = decode utf_16le ~report (string s) in
       next_n 3 chars ok (assert_equal (List.map Char.code ['f'; 'o'; 'o']));
       next_option chars ok (assert_equal (Some 0x1F419));
       next_option chars ok (assert_equal (Some (Char.code 'b')));
@@ -77,14 +81,14 @@ let tests = [
     end);
 
   ("encoding.iso_8859_1" >:: fun _ ->
-    let chars = string "foo\xa0\xa4" |> iso_8859_1 in
+    let chars = decode iso_8859_1 (string "foo\xa0\xa4") in
     next_n 5 chars
       ok (assert_equal (List.map Char.code ['f'; 'o'; 'o'; '\xa0'; '\xa4']));
     next_option chars ok (assert_equal None);
     next_option chars ok (assert_equal None));
 
   ("encoding.iso_8859_15" >:: fun _ ->
-    let chars = string "foo\xa0\xa4" |> iso_8859_15 in
+    let chars = decode iso_8859_15 (string "foo\xa0\xa4") in
     next_n 4 chars
       ok (assert_equal (List.map Char.code ['f'; 'o'; 'o'; '\xa0']));
     next_option chars ok (assert_equal (Some 0x20AC));
@@ -95,7 +99,7 @@ let tests = [
     let s = "foo\xa0bar" in
     expect_error (1, 4) (`Decoding_error ("\xa0", "us-ascii"))
     begin fun report ->
-      let chars = s |> string |> us_ascii ~report in
+      let chars = decode us_ascii ~report (string s) in
       next_n 3 chars ok (assert_equal (List.map Char.code ['f'; 'o'; 'o']));
       next_option chars ok (assert_equal (Some u_rep));
       next_n 3 chars ok (assert_equal (List.map Char.code ['b'; 'a'; 'r']));
@@ -104,7 +108,7 @@ let tests = [
     end);
 
   ("encoding.windows_1251" >:: fun _ ->
-    let chars = string "foo\xe0\xe1\xe2bar" |> windows_1251 in
+    let chars = decode windows_1251 (string "foo\xe0\xe1\xe2bar") in
     next_n 3 chars ok (assert_equal (List.map Char.code ['f'; 'o'; 'o']));
     next_n 3 chars ok (assert_equal [0x0430; 0x0431; 0x0432]);
     next_n 3 chars ok (assert_equal (List.map Char.code ['b'; 'a'; 'r']));
@@ -112,7 +116,7 @@ let tests = [
     next_option chars ok (assert_equal None));
 
   ("encoding.windows_1252" >:: fun _ ->
-    let chars = string "foo\x80\x83bar" |> windows_1252 in
+    let chars = decode windows_1252 (string "foo\x80\x83bar") in
     next_n 3 chars ok (assert_equal (List.map Char.code ['f'; 'o'; 'o']));
     next_n 2 chars ok (assert_equal [0x20AC; 0x0192]);
     next_n 3 chars ok (assert_equal (List.map Char.code ['b'; 'a'; 'r']));
@@ -144,7 +148,7 @@ let tests = [
       "\x00\x00\x80\x00");
 
   ("encoding.ebcdic" >:: fun _ ->
-    let chars = string "\x86\x96\x96" |> ebcdic in
+    let chars = decode ebcdic (string "\x86\x96\x96") in
     next_n 3 chars ok (assert_equal (List.map Char.code ['f'; 'o'; 'o']));
     next_option chars ok (assert_equal None);
     next_option chars ok (assert_equal None));

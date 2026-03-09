@@ -1,94 +1,84 @@
 (* This file is part of Markup.ml, released under the MIT license. See
    LICENSE.md for details, or visit https://github.com/aantron/markup.ml. *)
 
-open Kstream
-
-let state_fold f initial =
-  let state = ref initial in
-  (fun throw e k ->
-    f !state throw e (fun (c, new_state) ->
-      state := new_state; k c))
-  |> make
+(** Byte source: returns next byte as int 0-255, or -1 at EOF. *)
+type byte_src = unit -> int
 
 let string s =
-  state_fold (fun i _ e k ->
-    if i >= String.length s then e () else k (s.[i], i + 1)) 0
+  let i = ref 0 in
+  fun () ->
+    if !i >= String.length s then -1
+    else begin
+      let c = Char.code s.[!i] in
+      i := !i + 1;
+      c
+    end
 
 let buffer b =
-  state_fold (fun i _ e k ->
-    if i >= Buffer.length b then e () else k (Buffer.nth b i, i + 1)) 0
-
-(* Optimized away by Flambda. *)
-type result = Count of int | Exn of exn
+  let i = ref 0 in
+  fun () ->
+    if !i >= Buffer.length b then -1
+    else begin
+      let c = Char.code (Buffer.nth b !i) in
+      i := !i + 1;
+      c
+    end
 
 let channel c =
-  let ended = ref false in
-  let buffer_length = 4096 in
-  let buffer = Bytes.create buffer_length in
-  let position = ref 0 in
-  let buffered = ref 0 in
-
-  (fun throw e k ->
-    let position' = !position in
-    if position' < !buffered then begin
-      position := position' + 1;
-      k (Bytes.get buffer position')
+  let buf = Bytes.create 4096 in
+  let pos = ref 0 in
+  let len = ref 0 in
+  let at_eof = ref false in
+  fun () ->
+    if !pos < !len then begin
+      let ch = Char.code (Bytes.get buf !pos) in
+      pos := !pos + 1;
+      ch
+    end else if !at_eof then
+      -1
+    else begin
+      let n = input c buf 0 4096 in
+      if n = 0 then begin at_eof := true; -1 end
+      else begin
+        len := n;
+        pos := 1;
+        Char.code (Bytes.get buf 0)
+      end
     end
-    else
-      let result =
-        try Count (input c buffer 0 buffer_length)
-        with exn -> Exn exn
-      in
-      match result with
-      | Count 0 ->
-        ended := true;
-        e ()
-      | Count n ->
-        position := 1;
-        buffered := n;
-        k (Bytes.get buffer 0)
-      | Exn exn ->
-        if !ended then e ()
-        else throw exn)
-  |> make
 
 let file f =
   let c = open_in f in
-  let s = channel c in
-
-  let s' =
-    (fun throw e k ->
-      next s
-        (fun exn -> close_in_noerr c; throw exn)
-        (fun () -> close_in_noerr c; e ())
-        k)
-    |> make
+  let src = channel c in
+  let src' () =
+    let b = src () in
+    if b = -1 then (close_in_noerr c; -1)
+    else b
   in
+  src', (fun () -> close_in_noerr c)
 
-  s', fun () -> close_in_noerr c
+(** Output: consume a char stream and write to various sinks. *)
 
-let to_buffer s throw k =
-  let buffer = Buffer.create 4096 in
-  iter (fun b _ k -> Buffer.add_char buffer b; k ()) s throw (fun () ->
-  k buffer)
-
-let to_string s throw k =
-  to_buffer s throw (fun buffer -> k (Buffer.contents buffer))
-
-let to_channel c s throw k =
-  let write b throw k =
-    let exn =
-      try output_char c b; None
-      with exn -> Some exn
-    in
-    match exn with
-    | None -> k ()
-    | Some exn -> throw exn
+let to_buffer s =
+  let buf = Buffer.create 4096 in
+  let rec loop () =
+    match s () with
+    | None -> buf
+    | Some c -> Buffer.add_char buf c; loop ()
   in
-  iter write s throw k
+  loop ()
 
-let to_file f s throw k =
+let to_string s =
+  Buffer.contents (to_buffer s)
+
+let to_channel c s =
+  let rec loop () =
+    match s () with
+    | None -> ()
+    | Some ch -> output_char c ch; loop ()
+  in
+  loop ()
+
+let to_file f s =
   let c = open_out f in
-  to_channel c s
-    (fun exn -> close_out_noerr c; throw exn)
-    (fun () -> close_out_noerr c; k ())
+  (try to_channel c s with exn -> close_out_noerr c; raise exn);
+  close_out_noerr c

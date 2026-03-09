@@ -1,20 +1,38 @@
 (* This file is part of Markup.ml, released under the MIT license. See
    LICENSE.md for details, or visit https://github.com/aantron/markup.ml. *)
 
-val select_html : ?limit:int -> char Kstream.t -> Encoding.t Kstream.cps
-val select_xml : char Kstream.t -> Encoding.t Kstream.cps
+(** Encoding detection for HTML and XML.
+    All functions take a byte_src (unit -> int) that may be partially consumed
+    during detection, and return a replaying byte_src that makes all consumed
+    bytes available again. *)
 
-(* The following values are exposed for testing. They are not used outside the
-   module. *)
+val select_html :
+  ?limit:int ->
+  (unit -> int) ->
+    Encoding.t * (unit -> int)
+
+val select_xml :
+  (unit -> int) ->
+    Encoding.t * (unit -> int)
+
+(* The following values are exposed for testing. *)
 
 val normalize_name : bool -> string -> string
-val guess_from_bom_html : char Kstream.t -> string option Kstream.cps
-val guess_from_bom_xml : char Kstream.t -> string option Kstream.cps
-val guess_family_xml : char Kstream.t -> string option Kstream.cps
+
+val guess_from_bom_html :
+  (unit -> int) -> string option * (unit -> int)
+
+val guess_from_bom_xml :
+  (unit -> int) -> string option * (unit -> int)
+
+val guess_family_xml :
+  (unit -> int) -> string option * (unit -> int)
+
 val meta_tag_prescan :
-  ?supported:(string -> bool Kstream.cont -> unit) ->
+  ?supported:(string -> bool) ->
   ?limit:int ->
-  char Kstream.t ->
-    string option Kstream.cps
+  (unit -> int) ->
+    string option
+
 val read_xml_encoding_declaration :
-  char Kstream.t -> Encoding.t -> string option Kstream.cps
+  (unit -> int) -> Encoding.t -> string option

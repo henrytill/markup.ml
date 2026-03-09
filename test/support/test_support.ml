@@ -119,3 +119,15 @@ let expect_strings id strings =
   let string s throw k = receive (S s) throw; k () in
 
   report, string, ended
+
+(** Bridge: convert a byte_src (unit -> int) to an int Kstream.t. *)
+let decoder_to_int_kstream (dec : unit -> int) : int Kstream.t =
+  Kstream.make (fun _ e k ->
+    let v = dec () in
+    if v = -1 then e () else k v)
+
+(** Bridge: convert a byte_src (unit -> int) to a char Kstream.t. *)
+let byte_src_to_char_kstream (src : unit -> int) : char Kstream.t =
+  Kstream.make (fun _ e k ->
+    let b = src () in
+    if b = -1 then e () else k (Char.chr b))

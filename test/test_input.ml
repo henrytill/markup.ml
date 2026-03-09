@@ -17,8 +17,9 @@ let tests = [
     expect_error (4, 2) (`Bad_token ("U+0000", "input", "out of range"))
     begin fun report ->
       let s, get_location =
-        string "fo\no\xc2\xa0ba\rr\xa0ba\r\nz\x00quux"
-        |> utf_8
+        let byte_src = string "fo\no\xc2\xa0ba\rr\xa0ba\r\nz\x00quux" in
+        let dec = utf_8 ~report:Markup__Error.ignore_errors ~byte_src in
+        decoder_to_int_kstream dec
         |> preprocess is_valid_xml_char report
       in
 
@@ -51,8 +52,9 @@ let tests = [
     expect_error (1, 8) (`Bad_token ("U+0001", "input", "out of range"))
     begin fun report ->
       let s, get_location =
-        string "foo\x00bar\x01"
-        |> utf_8
+        let byte_src = string "foo\x00bar\x01" in
+        let dec = utf_8 ~report:Markup__Error.ignore_errors ~byte_src in
+        decoder_to_int_kstream dec
         |> preprocess is_valid_html_char report
       in
 

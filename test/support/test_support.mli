@@ -34,3 +34,6 @@ val expect_strings :
 val iter :
   ('a -> (exn -> unit) -> (unit -> unit) -> unit) ->
   'a Markup__Kstream.t -> unit
+
+val decoder_to_int_kstream : (unit -> int) -> int Markup__Kstream.t
+val byte_src_to_char_kstream : (unit -> int) -> char Markup__Kstream.t

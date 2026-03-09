@@ -2,8 +2,51 @@
    LICENSE.md for details, or visit https://github.com/aantron/markup.ml. *)
 
 open Common
-open Kstream
 open Encoding
+
+(** Make a buffering byte_src wrapper.
+    Returns (recording_src, make_replay) where:
+    - recording_src reads from src and records bytes
+    - make_replay () returns a new byte_src that replays all recorded bytes
+      followed by the remaining bytes from src *)
+let make_buffered_src src =
+  let buf = Buffer.create 8 in
+  let recording_src () =
+    let b = src () in
+    if b >= 0 then Buffer.add_char buf (Char.chr b);
+    b
+  in
+  let make_replay () =
+    let s = Buffer.contents buf in
+    let i = ref 0 in
+    fun () ->
+      if !i < String.length s then begin
+        let b = Char.code s.[!i] in
+        i := !i + 1; b
+      end else src ()
+  in
+  recording_src, make_replay
+
+(** Read up to n bytes from src, returning the list of bytes read (as ints).
+    Stops early at EOF. *)
+let read_n_bytes n src =
+  let acc = ref [] in
+  let count = ref 0 in
+  while !count < n do
+    let b = src () in
+    if b = -1 then count := n  (* stop *)
+    else begin acc := b :: !acc; incr count end
+  done;
+  List.rev !acc
+
+(** Given a list of pre-read bytes and the original src, return a new src
+    that replays those bytes then continues from src. *)
+let make_replay_src bytes src =
+  let remaining = ref bytes in
+  fun () ->
+    match !remaining with
+    | [] -> src ()
+    | b :: rest -> remaining := rest; b
 
 let name_to_encoding = function
   | "utf-8" -> Some utf_8
@@ -19,37 +62,52 @@ let name_to_encoding = function
   | _ -> None
 
 (* 8.2.2.2. *)
-let guess_from_bom_html source throw k =
-  peek_n 3 source throw (function
-    | '\xFE'::'\xFF'::_ -> k (Some "utf-16be")
-    | '\xFF'::'\xFE'::_ -> k (Some "utf-16le")
-    | ['\xEF'; '\xBB'; '\xBF'] -> k (Some "utf-8")
-    | _ -> k None)
+let guess_from_bom_html src =
+  let bytes = read_n_bytes 3 src in
+  let replay = make_replay_src bytes src in
+  let result =
+    match bytes with
+    | 0xFE :: 0xFF :: _ -> Some "utf-16be"
+    | 0xFF :: 0xFE :: _ -> Some "utf-16le"
+    | [0xEF; 0xBB; 0xBF] -> Some "utf-8"
+    | _ -> None
+  in
+  result, replay
 
 (* Appendix F.1. *)
-let guess_from_bom_xml source throw k =
-  peek_n 4 source throw (function
-    | ['\x00'; '\x00'; '\xFE'; '\xFF'] -> k (Some "ucs-4be")
-    | ['\xFF'; '\xFE'; '\x00'; '\x00'] -> k (Some "ucs-4le")
-    | ['\x00'; '\x00'; '\xFF'; '\xFE'] -> k (Some "ucs-4be-transposed")
-    | ['\xFE'; '\xFF'; '\x00'; '\x00'] -> k (Some "ucs-4le-transposed")
-    | '\xFE'::'\xFF'::_ -> k (Some "utf-16be")
-    | '\xFF'::'\xFE'::_ -> k (Some "utf-16le")
-    | '\xEF'::'\xBB'::'\xBF'::_ -> k (Some "utf-8")
-    | _ -> k None)
+let guess_from_bom_xml src =
+  let bytes = read_n_bytes 4 src in
+  let replay = make_replay_src bytes src in
+  let result =
+    match bytes with
+    | [0x00; 0x00; 0xFE; 0xFF] -> Some "ucs-4be"
+    | [0xFF; 0xFE; 0x00; 0x00] -> Some "ucs-4le"
+    | [0x00; 0x00; 0xFF; 0xFE] -> Some "ucs-4be-transposed"
+    | [0xFE; 0xFF; 0x00; 0x00] -> Some "ucs-4le-transposed"
+    | 0xFE :: 0xFF :: _ -> Some "utf-16be"
+    | 0xFF :: 0xFE :: _ -> Some "utf-16le"
+    | 0xEF :: 0xBB :: 0xBF :: _ -> Some "utf-8"
+    | _ -> None
+  in
+  result, replay
 
 (* Appendix F.1. *)
-let guess_family_xml source throw k =
-  peek_n 4 source throw (function
-    | ['\x00'; '\x00'; '\x00'; '\x3C'] -> k (Some "ucs-4be")
-    | ['\x3C'; '\x00'; '\x00'; '\x00'] -> k (Some "ucs-4le")
-    | ['\x00'; '\x00'; '\x3C'; '\x00'] -> k (Some "ucs-4be-transposed")
-    | ['\x00'; '\x3C'; '\x00'; '\x00'] -> k (Some "ucs-4le-transposed")
-    | ['\x00'; '\x3C'; '\x00'; '\x3F'] -> k (Some "utf-16be")
-    | ['\x3C'; '\x00'; '\x3F'; '\x00'] -> k (Some "utf-16le")
-    | ['\x3C'; '\x3F'; '\x78'; '\x6D'] -> k (Some "utf-8")
-    | ['\x4C'; '\x6F'; '\xA7'; '\x94'] -> k (Some "ebcdic")
-    | _ -> k None)
+let guess_family_xml src =
+  let bytes = read_n_bytes 4 src in
+  let replay = make_replay_src bytes src in
+  let result =
+    match bytes with
+    | [0x00; 0x00; 0x00; 0x3C] -> Some "ucs-4be"
+    | [0x3C; 0x00; 0x00; 0x00] -> Some "ucs-4le"
+    | [0x00; 0x00; 0x3C; 0x00] -> Some "ucs-4be-transposed"
+    | [0x00; 0x3C; 0x00; 0x00] -> Some "ucs-4le-transposed"
+    | [0x00; 0x3C; 0x00; 0x3F] -> Some "utf-16be"
+    | [0x3C; 0x00; 0x3F; 0x00] -> Some "utf-16le"
+    | [0x3C; 0x3F; 0x78; 0x6D] -> Some "utf-8"
+    | [0x4C; 0x6F; 0xA7; 0x94] -> Some "ebcdic"
+    | _ -> None
+  in
+  result, replay
 
 (* 5.2 in the Encoding Candidate Recommendation. *)
 let normalize_name for_html s =
@@ -204,335 +262,483 @@ let normalize_name for_html s =
 
   | s -> s
 
-(* 8.2.2.2. *)
-let meta_tag_prescan =
+(** Direct-style meta_tag_prescan.
+    Takes byte_src (which will be consumed); the src is NOT rewound after.
+    The caller should use make_buffered_src if rewinding is needed. *)
+
+(* 8.2.2.2 - meta tag prescan, implemented in direct style over byte_src *)
+let meta_tag_prescan ?supported ?(limit = 1024) src =
   let is_uppercase c = c >= 'A' && c <= 'Z' in
   let is_lowercase c = c >= 'a' && c <= 'z' in
   let is_letter c = is_uppercase c || is_lowercase c in
   let is_whitespace c = String.contains "\t\n\r\x0C " c in
 
-  let rec skip_whitespace source throw k =
-    next source throw k (function
-      | c when is_whitespace c -> skip_whitespace source throw k
-      | c -> push source c; k ())
-  in
-
-  let read_quoted_value quote source throw k =
-    let buffer = Buffer.create 32 in
-
-    let rec iterate () =
-      next source throw (fun () -> k "") (function
-        | c when c = quote -> k (Buffer.contents buffer)
-        | c -> add_utf_8 buffer (Char.code (Char.lowercase_ascii c)); iterate ())
-    in
-    iterate ()
-  in
-
-  let read_unquoted_value terminator source throw k =
-    let buffer = Buffer.create 32 in
-
-    let rec iterate () =
-      next source throw (fun () -> k (Buffer.contents buffer)) (function
-        | c when is_whitespace c || c = terminator ->
-          push source c;
-          k (Buffer.contents buffer)
-        | c ->
-          add_utf_8 buffer (Char.code (Char.lowercase_ascii c));
-          iterate ())
-    in
-    iterate ()
-  in
-
-  (* 2.6.5. *)
-  let extract_encoding source throw k =
-    let rec scan () =
-      next source throw (fun () -> k None) begin function
-        | 'c' ->
-          next_n 6 source throw begin fun l ->
-            match List.map Char.lowercase_ascii l with
-            | ['h'; 'a'; 'r'; 's'; 'e'; 't'] ->
-              skip_whitespace source throw (fun () ->
-              next source throw (fun () -> k None) begin function
-                | '=' ->
-                  skip_whitespace source throw (fun () ->
-                  next source throw (fun () -> k None) (fun c ->
-                  let continue_with =
-                    match c with
-                    | '"' | '\'' as c -> read_quoted_value c source throw
-                    | _ -> push source c; read_unquoted_value ';' source throw
-                  in
-                  continue_with (function
-                    | "" -> k None
-                    | s -> k (Some s))))
-
-                | c ->
-                  push source c;
-                  scan ()
-              end)
-            | _ -> scan ()
-          end
-        | _ -> scan ()
-      end
-    in
-    scan ()
-  in
-
-  let everything = fun _ k -> k true in
-
-  fun ?(supported = everything) ?(limit = 1024) source throw k ->
-    let source, restore = checkpoint source in
-    let finish result = restore (); k result in
-
-    let source =
-      let count = ref 0 in
-      (fun throw empty k ->
-        if !count >= limit then empty ()
-        else next source throw empty (fun c -> count := !count + 1; k c))
-      |> make
-    in
-
-    let get_attribute k' =
-      let rec skip_leading k =
-        next source throw (fun () -> k' None) (function
-          | c when is_whitespace c || c = '/' -> skip_leading k
-          | c -> push source c; k ())
-      in
-
-      let read_name k =
-        let buffer = Buffer.create 32 in
-
-        let rec iterate () =
-          next_option source throw begin function
-            | Some ('=' as c) when Buffer.length buffer > 0 ->
-              push source c;
-              k (Buffer.contents buffer)
-
-            | Some '/' | Some '>' | None as c ->
-              push_option source c;
-              if Buffer.length buffer = 0 then k' None
-              else k' (Some (Buffer.contents buffer, ""))
-
-            | Some c when is_whitespace c ->
-              k (Buffer.contents buffer)
-
-            | Some c ->
-              add_utf_8 buffer (Char.code (Char.lowercase_ascii c));
-              iterate ()
-          end
-        in
-        iterate ()
-      in
-
-      skip_leading (fun () ->
-      read_name (fun name ->
-      skip_whitespace source throw (fun () ->
-      next_option source throw begin function
-        | Some '=' ->
-          skip_whitespace source throw (fun () ->
-          next_option source throw (fun maybe_c ->
-          let continue_with =
-            match maybe_c with
-            | Some ('\'' | '"' as c) ->
-              read_quoted_value c source throw
-            | Some c ->
-              push source c;
-              read_unquoted_value '>' source throw
-            | None ->
-              read_unquoted_value '>' source throw
-          in
-          continue_with (fun value -> k' (Some (name, value)))))
-
-        | c ->
-          push_option source c;
-          k' (Some (name, ""))
-      end)))
-    in
-
-    let read_attributes k =
-      let rec iterate names got_pragma need_pragma charset =
-        get_attribute begin function
-          | None -> k got_pragma need_pragma charset
-          | Some (name, value) ->
-            if list_mem_string name names then
-              iterate names got_pragma need_pragma charset
-            else
-              let names = name::names in
-              match name with
-              | "http-equiv" ->
-                if value = "content-type" then
-                  iterate names true need_pragma charset
-                else
-                  iterate names got_pragma need_pragma charset
-
-              | "content" ->
-                if charset <> None then
-                  iterate names got_pragma need_pragma charset
-                else
-                  extract_encoding (Stream_io.string value) throw begin function
-                    | None -> iterate names got_pragma need_pragma charset
-                    | Some encoding ->
-                      iterate names got_pragma (Some true) (Some encoding)
-                  end
-
-              | "charset" ->
-                if value = "" then
-                  iterate names got_pragma need_pragma charset
-                else
-                  iterate names got_pragma (Some false) (Some value)
-
-              | _ -> iterate names got_pragma need_pragma charset
-        end
-      in
-      iterate [] false None None
-    in
-
-    let process_attributes got_pragma need_pragma charset k =
-      match need_pragma with
-      | None -> k None
-      | Some need_pragma ->
-        if need_pragma && (not got_pragma) then k None
-        else
-          match charset with
-          | None -> k None
-          | Some charset ->
-            let charset =
-              match normalize_name true charset with
-              | "utf-16be" | "utf-16le" | "utf-16" -> "utf-8"
-              | s -> s
-            in
-            supported charset (function
-              | true -> k (Some charset)
-              | false -> k None)
-    in
-
-    let process_meta_tag k =
-      read_attributes (fun got_pragma need_pragma charset ->
-      process_attributes got_pragma need_pragma charset (function
-        | None -> k ()
-        | v -> finish v))
-    in
-
-    let rec close_comment k =
-      next source throw (fun () -> finish None) (function
-        | '-' ->
-          next_n 2 source throw (function
-            | ['-'; '>'] -> k ()
-            | l -> push_list source l; close_comment k)
-        | _ -> close_comment k)
-    in
-
-    let close_tag k =
-      let rec skip () =
-        next source throw (fun () -> finish None) (function
-          | c when is_whitespace c || c = '>' ->
-            push source c;
-            let rec drain_attributes () =
-              get_attribute (function
-                | None -> k ()
-                | Some _ -> drain_attributes ())
-            in
-            drain_attributes ()
-
-          | _ -> skip ())
-      in
-      skip ()
-    in
-
-    let rec close_tag_like k =
-      next source throw (fun () -> finish None) (function
-        | '>' -> k ()
-        | _ -> close_tag_like k)
-    in
-
-    let rec scan () =
-      next source throw (fun () -> finish None) begin function
-        | '<' ->
-          peek source throw (fun () -> finish None) begin function
-            | '!' ->
-              peek_n 3 source throw (function
-                | ['!'; '-'; '-'] -> close_comment scan
-                | _ -> close_tag_like scan)
-
-            | '/' ->
-              peek_n 2 source throw (function
-                | ['/'; c] when is_letter c -> close_tag scan
-                | _ -> close_tag_like scan)
-
-            | '?' ->
-              close_tag_like scan
-
-            | 'm' ->
-              peek_n 5 source throw (fun l ->
-                match List.map Char.lowercase_ascii l with
-                | ['m'; 'e'; 't'; 'a'; c] when is_whitespace c || c = '/' ->
-                  next_n 4 source throw (fun _ ->
-                  process_meta_tag scan)
-
-                | _ ->
-                  close_tag scan)
-
-            | c when is_letter c ->
-              close_tag scan
-
-            | _ ->
-              scan ()
-          end
-
-        | _ -> scan ()
-      end
-    in
-    scan ()
-
-let read_xml_encoding_declaration bytes (family : Encoding.t) throw k =
-  let bytes, restore = Kstream.checkpoint bytes in
-  let k v = restore (); k v in
-
-  let tokens =
-    bytes
-    |> family
-    |> Input.preprocess is_valid_xml_char Error.ignore_errors
-    |> Xml_tokenizer.tokenize Error.ignore_errors (fun _ -> None)
-  in
-
-  let rec prescan () =
-    Kstream.next tokens throw (fun () -> k None) begin function
-      | _, `Xml {Common.encoding} -> k encoding
-      | _, `Comment _ -> prescan ()
-      | _, `Chars s when List.for_all is_whitespace_only s -> prescan ()
-      | _ -> k None
+  (* Limit-counting wrapper *)
+  let count = ref 0 in
+  let lsrc () =
+    if !count >= limit then -1
+    else begin
+      let b = src () in
+      if b >= 0 then incr count;
+      b
     end
   in
 
-  prescan ()
+  (* We use a simple single-element pushback *)
+  let pushed_back = ref [] in
+  let next () =
+    match !pushed_back with
+    | c :: rest -> pushed_back := rest; c
+    | [] -> lsrc ()
+  in
+  let push c = pushed_back := c :: !pushed_back in
+  let push_list l = pushed_back := l @ !pushed_back in
+
+  let next_char () =
+    let b = next () in
+    if b = -1 then None else Some (Char.chr b)
+  in
+
+  let skip_whitespace () =
+    let rec loop () =
+      match next_char () with
+      | None -> ()
+      | Some c when is_whitespace c -> loop ()
+      | Some c -> push (Char.code c)
+    in loop ()
+  in
+
+  (* Returns None if EOF reached before closing quote (unterminated), Some value otherwise *)
+  let read_quoted_value quote =
+    let buffer = Buffer.create 32 in
+    let rec iterate () =
+      match next_char () with
+      | None -> None
+      | Some c when c = quote -> Some (Buffer.contents buffer)
+      | Some c ->
+        add_utf_8 buffer (Char.code (Char.lowercase_ascii c));
+        iterate ()
+    in iterate ()
+  in
+
+  let read_unquoted_value terminator =
+    let buffer = Buffer.create 32 in
+    let rec iterate () =
+      match next_char () with
+      | None -> Buffer.contents buffer
+      | Some c when is_whitespace c || c = terminator ->
+        push (Char.code c);
+        Buffer.contents buffer
+      | Some c ->
+        add_utf_8 buffer (Char.code (Char.lowercase_ascii c));
+        iterate ()
+    in iterate ()
+  in
+
+  (* 2.6.5 - scan for charset=... in a content attribute value *)
+  let extract_encoding_from_string s =
+    (* Create a byte_src from s *)
+    let i = ref 0 in
+    let ssrc () =
+      if !i >= String.length s then -1
+      else begin let b = Char.code s.[!i] in incr i; b end
+    in
+    let pushed2 = ref [] in
+    let next2 () =
+      match !pushed2 with
+      | b :: rest -> pushed2 := rest; b
+      | [] -> ssrc ()
+    in
+    let next2_char () =
+      let b = next2 () in if b = -1 then None else Some (Char.chr b)
+    in
+    let push2 c = pushed2 := (Char.code c) :: !pushed2 in
+
+    let skip_ws2 () =
+      let rec loop () =
+        match next2_char () with
+        | None -> ()
+        | Some c when is_whitespace c -> loop ()
+        | Some c -> push2 c
+      in loop ()
+    in
+
+    let read_qval2 quote =
+      let buf = Buffer.create 32 in
+      let rec loop () =
+        match next2_char () with
+        | None -> Buffer.contents buf
+        | Some c when c = quote -> Buffer.contents buf
+        | Some c ->
+          add_utf_8 buf (Char.code (Char.lowercase_ascii c));
+          loop ()
+      in loop ()
+    in
+
+    let read_uval2 term =
+      let buf = Buffer.create 32 in
+      let rec loop () =
+        match next2_char () with
+        | None -> Buffer.contents buf
+        | Some c when is_whitespace c || c = term ->
+          push2 c;
+          Buffer.contents buf
+        | Some c ->
+          add_utf_8 buf (Char.code (Char.lowercase_ascii c));
+          loop ()
+      in loop ()
+    in
+
+    let rec scan () =
+      match next2_char () with
+      | None -> None
+      | Some 'c' ->
+        (* Try to read "harset" *)
+        let rest = Array.make 6 ' ' in
+        let n = ref 0 in
+        while !n < 6 do
+          match next2_char () with
+          | None -> n := 6
+          | Some c -> rest.(!n) <- c; incr n
+        done;
+        let rest_s = String.init 6 (fun i -> rest.(i)) in
+        if String.lowercase_ascii rest_s = "harset" then begin
+          skip_ws2 ();
+          match next2_char () with
+          | None -> None
+          | Some '=' ->
+            skip_ws2 ();
+            (match next2_char () with
+            | None -> None
+            | Some ('"' | '\'' as q) ->
+              let v = read_qval2 q in
+              if v = "" then None else Some v
+            | Some c ->
+              push2 c;
+              let v = read_uval2 ';' in
+              if v = "" then None else Some v)
+          | Some c ->
+            push2 c;
+            scan ()
+        end else
+          scan ()
+      | Some _ -> scan ()
+    in
+    scan ()
+  in
+
+  let get_attribute () =
+    (* Skip leading whitespace and '/' *)
+    let rec skip_leading () =
+      match next_char () with
+      | None -> None
+      | Some c when is_whitespace c || c = '/' -> skip_leading ()
+      | Some c -> push (Char.code c); Some ()
+    in
+    match skip_leading () with
+    | None -> None
+    | Some () ->
+      (* Read name *)
+      let name_buf = Buffer.create 32 in
+      let rec read_name () =
+        match next_char () with
+        | Some '=' when Buffer.length name_buf > 0 ->
+          push (Char.code '=');
+          Some (Buffer.contents name_buf)
+        | Some '/' | Some '>' | None as opt ->
+          (match opt with
+          | Some c -> push (Char.code c)
+          | None -> ());
+          if Buffer.length name_buf = 0 then
+            None  (* no attr, no value *)
+          else
+            Some (Buffer.contents name_buf)  (* attr with no value *)
+        | Some c when is_whitespace c ->
+          Some (Buffer.contents name_buf)
+        | Some c ->
+          add_utf_8 name_buf (Char.code (Char.lowercase_ascii c));
+          read_name ()
+      in
+      match read_name () with
+      | None ->
+        (* Saw '/', '>' or None with empty name - signal end of tag *)
+        None
+      | Some name ->
+        skip_whitespace ();
+        match next_char () with
+        | Some '=' ->
+          skip_whitespace ();
+          (match next_char () with
+          | Some ('"' | '\'' as q) ->
+            (match read_quoted_value q with
+            | None -> None  (* EOF before closing quote: abort attribute *)
+            | Some v -> Some (name, v))
+          | Some c ->
+            push (Char.code c);
+            let v = read_unquoted_value '>' in
+            Some (name, v)
+          | None ->
+            let v = read_unquoted_value '>' in
+            Some (name, v))
+        | Some c ->
+          push (Char.code c);
+          Some (name, "")
+        | None ->
+          Some (name, "")
+  in
+
+  let result = ref None in
+  let finished = ref false in
+
+  let finish v = result := v; finished := true in
+
+  let everything _ = true in
+  let supported_fn = match supported with
+    | None -> everything
+    | Some f -> f
+  in
+
+  let read_attributes () =
+    let names = ref [] in
+    let got_pragma = ref false in
+    let need_pragma = ref None in
+    let charset = ref None in
+    let cont = ref true in
+    while !cont && not !finished do
+      match get_attribute () with
+      | None -> cont := false
+      | Some (name, value) ->
+        if list_mem_string name !names then ()
+        else begin
+          names := name :: !names;
+          match name with
+          | "http-equiv" ->
+            if value = "content-type" then got_pragma := true
+          | "content" ->
+            if !charset = None then begin
+              match extract_encoding_from_string value with
+              | None -> ()
+              | Some enc ->
+                charset := Some enc;
+                need_pragma := Some true
+            end
+          | "charset" ->
+            if value <> "" then begin
+              charset := Some value;
+              need_pragma := Some false
+            end
+          | _ -> ()
+        end
+    done;
+    match !need_pragma with
+    | None -> ()
+    | Some np ->
+      if np && not !got_pragma then ()
+      else
+        match !charset with
+        | None -> ()
+        | Some cs ->
+          let cs =
+            match normalize_name true cs with
+            | "utf-16be" | "utf-16le" | "utf-16" -> "utf-8"
+            | s -> s
+          in
+          if supported_fn cs then
+            finish (Some cs)
+  in
+
+  (* Close comment: called after consuming '<!-'. Reads until '-->' is found.
+     The caller pushes back one '-' before calling, so the source starts with '-'.
+     This matches the old kstream-based behavior. *)
+  let close_comment () =
+    let rec loop () =
+      if !finished then ()
+      else
+        match next_char () with
+        | None -> finish None
+        | Some '-' ->
+          let b2 = next_char () in
+          let b3 = next_char () in
+          (match b2, b3 with
+          | Some '-', Some '>' -> ()
+          | _ ->
+            (match b2 with Some c -> push (Char.code c) | None -> ());
+            (match b3 with Some c -> push (Char.code c) | None -> ());
+            loop ())
+        | Some _ -> loop ()
+    in
+    loop ()
+  in
+
+  let close_tag () =
+    (* Skip to '>' or whitespace, then drain attributes *)
+    let rec skip () =
+      match next_char () with
+      | None -> finish None
+      | Some c when is_whitespace c || c = '>' ->
+        push (Char.code c);
+        let cont = ref true in
+        while !cont do
+          match get_attribute () with
+          | None -> cont := false
+          | Some _ -> ()
+        done
+      | Some _ -> skip ()
+    in
+    skip ()
+  in
+
+  let close_tag_like () =
+    let rec loop () =
+      match next_char () with
+      | None -> finish None
+      | Some '>' -> ()
+      | Some _ -> loop ()
+    in loop ()
+  in
+
+  let rec scan () =
+    if !finished then ()
+    else
+      match next_char () with
+      | None -> finish None
+      | Some '<' ->
+        (match next_char () with
+        | None -> finish None
+        | Some '!' ->
+          (* peek next 2 chars to check for <!-- *)
+          let c1 = next_char () in
+          let c2 = next_char () in
+          (match c1, c2 with
+          | Some '-', Some '-' ->
+            (* Push back '!', '-', '-' to replicate old kstream behavior where
+               close_comment was called with '!--...' still in stream. This makes
+               '<!-->' work: close_comment reads '!' (skip), '-', then next 2 = '-',
+               '>' which matches '-->'. *)
+            push_list [Char.code '!'; Char.code '-'; Char.code '-'];
+            close_comment (); scan ()
+          | _ ->
+            (match c1 with Some c -> push (Char.code c) | None -> ());
+            (match c2 with Some c -> push (Char.code c) | None -> ());
+            close_tag_like (); scan ())
+        | Some '/' ->
+          (* peek next char *)
+          let c1 = next_char () in
+          (match c1 with
+          | Some c when is_letter c ->
+            push (Char.code c);
+            close_tag (); scan ()
+          | _ ->
+            (match c1 with Some c -> push (Char.code c) | None -> ());
+            close_tag_like (); scan ())
+        | Some '?' ->
+          close_tag_like (); scan ()
+        | Some 'm' ->
+          (* peek 4 more chars to check for "eta" + whitespace *)
+          let c1 = next_char () in
+          let c2 = next_char () in
+          let c3 = next_char () in
+          let c4 = next_char () in
+          let chars = List.filter_map (fun x -> x) [c1; c2; c3; c4] in
+          let s4 = String.init (List.length chars) (List.nth chars) in
+          let s4_lower = String.lowercase_ascii s4 in
+          if String.length s4_lower >= 4 &&
+             s4_lower.[0] = 'e' && s4_lower.[1] = 't' &&
+             s4_lower.[2] = 'a' &&
+             (is_whitespace s4_lower.[3] || s4_lower.[3] = '/') then begin
+            read_attributes (); scan ()
+          end else begin
+            (* push back the 4 chars we read, plus 'm' *)
+            push_list (List.map Char.code chars);
+            push (Char.code 'm');
+            close_tag (); scan ()
+          end
+        | Some c when is_letter c ->
+          push (Char.code c);
+          close_tag (); scan ()
+        | Some c ->
+          push (Char.code c);
+          scan ())
+      | Some _ -> scan ()
+  in
+
+  scan ();
+  !result
+
+
+let read_xml_encoding_declaration byte_src (family : Encoding.t) =
+  let int_ks = Encoding.decoder_to_kstream
+    (family ~report:Error.ignore_errors ~byte_src)
+  in
+  let (processed, _get_loc) =
+    Input.preprocess is_valid_xml_char Error.ignore_errors int_ks
+  in
+  let tokens =
+    Xml_tokenizer.tokenize Error.ignore_errors (fun _ -> None)
+      (processed, fun () -> (1, 1))
+  in
+
+  let result = ref None in
+  let cont = ref true in
+  while !cont do
+    let r = ref None in
+    Kstream.next_option tokens raise (fun v -> r := v);
+    match !r with
+    | None -> cont := false
+    | Some (_, `Xml {Common.encoding}) ->
+      result := encoding; cont := false
+    | Some (_, `Comment _) -> ()
+    | Some (_, `Chars ss) when List.for_all is_whitespace_only ss -> ()
+    | Some _ -> cont := false
+  done;
+  !result
 
 let name_to_encoding_or_utf_8 encoding =
   match name_to_encoding encoding with
   | Some e -> e
   | None -> utf_8
 
-let select_html ?limit bytes throw k =
-  guess_from_bom_html bytes throw (function
-    | Some encoding -> k (name_to_encoding_or_utf_8 encoding)
-    | None ->
-      meta_tag_prescan ?limit bytes throw (function
-        | Some encoding -> k (name_to_encoding_or_utf_8 encoding)
-        | None -> k utf_8))
+let select_html ?limit byte_src =
+  let rec_src, make_replay = make_buffered_src byte_src in
+  let bom_result, _bom_replay = guess_from_bom_html rec_src in
+  (* The rec_src recorded all bytes read by guess_from_bom_html.
+     make_replay () will give us a src that replays those bytes + rest of orig. *)
+  let replay = make_replay () in
+  match bom_result with
+  | Some encoding -> name_to_encoding_or_utf_8 encoding, replay
+  | None ->
+    (* For meta_tag_prescan, we need to buffer everything read *)
+    let rec_src2, make_replay2 = make_buffered_src replay in
+    let prescan_result = meta_tag_prescan ?limit rec_src2 in
+    let replay2 = make_replay2 () in
+    match prescan_result with
+    | Some encoding -> name_to_encoding_or_utf_8 encoding, replay2
+    | None -> utf_8, replay2
 
-let select_xml bytes throw k =
-  guess_from_bom_xml bytes throw (function
-    | Some encoding -> k (name_to_encoding_or_utf_8 encoding)
-    | None ->
-      (fun k' ->
-        guess_family_xml bytes throw (function
-          | None -> k' "utf-8" utf_8
-          | Some family -> k' family (name_to_encoding_or_utf_8 family)))
-      (fun name family ->
-        read_xml_encoding_declaration bytes family throw (function
-          | None -> k (name_to_encoding_or_utf_8 name)
-          | Some encoding ->
-            match name, normalize_name false encoding with
-            | "utf-8", "iso-8859-1" -> k iso_8859_1
-            | "utf-8", "us-ascii" -> k us_ascii
-            | "utf-8", "windows-1251" -> k windows_1251
-            | "utf-8", "windows-1252" -> k windows_1252
-            | _ -> k (name_to_encoding_or_utf_8 name))))
+let select_xml byte_src =
+  let rec_src, make_replay = make_buffered_src byte_src in
+  let bom_result, _bom_replay = guess_from_bom_xml rec_src in
+  let replay = make_replay () in
+  match bom_result with
+  | Some encoding -> name_to_encoding_or_utf_8 encoding, replay
+  | None ->
+    let rec_src2, make_replay2 = make_buffered_src replay in
+    let family_result, _fam_replay = guess_family_xml rec_src2 in
+    let replay2 = make_replay2 () in
+    let name, family =
+      match family_result with
+      | None -> "utf-8", utf_8
+      | Some family_name -> family_name, name_to_encoding_or_utf_8 family_name
+    in
+    let rec_src3, make_replay3 = make_buffered_src replay2 in
+    let enc_decl = read_xml_encoding_declaration rec_src3 family in
+    let replay3 = make_replay3 () in
+    match enc_decl with
+    | None -> name_to_encoding_or_utf_8 name, replay3
+    | Some encoding ->
+      match name, normalize_name false encoding with
+      | "utf-8", "iso-8859-1" -> iso_8859_1, replay3
+      | "utf-8", "us-ascii" -> us_ascii, replay3
+      | "utf-8", "windows-1251" -> windows_1251, replay3
+      | "utf-8", "windows-1252" -> windows_1252, replay3
+      | _ -> name_to_encoding_or_utf_8 name, replay3

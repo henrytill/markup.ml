@@ -25,9 +25,10 @@ let no_custom_entities = fun _ -> None
 let expect ?(entity = no_custom_entities) text signals =
   let report, iterate, ended = expect_signals token_to_string text signals in
 
-  text
-  |> Markup__Stream_io.string
-  |> Markup__Encoding.utf_8
+  let byte_src = Markup__Stream_io.string text in
+  let decoder = Markup__Encoding.utf_8 ~report:Error.ignore_errors ~byte_src in
+  let int_ks = decoder_to_int_kstream decoder in
+  int_ks
   |> Markup__Input.preprocess is_valid_xml_char Error.ignore_errors
   |> Markup__Xml_tokenizer.tokenize report entity
   |> iter iterate;
