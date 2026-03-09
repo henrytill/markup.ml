@@ -34,7 +34,48 @@ let uutf_decoder encoding name =
     |> make)
   |> wrap
 
-let utf_8 : t = uutf_decoder `UTF_8 "utf-8"
+let utf_8 : t =
+  (fun report bytes ->
+    let decoder = Uutf.decoder ~encoding:`UTF_8 `Manual in
+    let bytes_one = Bytes.create 1 in
+    let line = ref 1 in
+    let col = ref 1 in
+
+    let advance c =
+      if c = 0x0A then (line := !line + 1; col := 1)
+      else col := !col + 1
+    in
+
+    (fun throw empty k ->
+      let rec run () =
+        match Uutf.decode decoder with
+        | `End -> empty ()
+        | `Uchar c ->
+          let c = Uchar.to_int c in
+          advance c;
+          k c
+        | `Malformed s ->
+          let location = !line, !col in
+          col := !col + 1;
+          report location (`Decoding_error (s, "utf-8")) throw (fun () ->
+          k u_rep)
+        | `Await ->
+          next bytes throw
+            (fun () -> Uutf.Manual.src decoder bytes_empty 0 0; run ())
+            (fun c ->
+              let i = Char.code c in
+              if i < 0x80 then begin
+                advance i;
+                k i
+              end else begin
+                Bytes.set bytes_one 0 c;
+                Uutf.Manual.src decoder bytes_one 0 1;
+                run ()
+              end)
+      in
+      run ())
+    |> make)
+  |> wrap
 let utf_16be : t = uutf_decoder `UTF_16BE "utf-16be"
 let utf_16le : t = uutf_decoder `UTF_16LE "utf-16le"
 let iso_8859_1 : t = uutf_decoder `ISO_8859_1 "iso-8859-1"
