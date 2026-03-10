@@ -142,9 +142,14 @@ struct
 
     let with_encoding (encoding : Encoding.t) byte_src k =
       let decoder = encoding ~report ~byte_src in
-      let hi = Html_parser.make ~report ?context decoder in
+      let context' = match context with
+        | None -> None
+        | Some `Document -> Some `Document
+        | Some (`Fragment s) -> Some (`Fragment s)
+      in
+      let hi = Html_direct.make ~report ?context:context' decoder in
       Kstream.make (fun _ e k ->
-        match Html_parser.next_signal hi with
+        match Html_direct.next_signal hi with
         | None -> e ()
         | Some v -> k v)
       |> k
