@@ -8,6 +8,7 @@ type token =
   [ `Doctype of doctype
   | `Start of Token_tag.t
   | `End of Token_tag.t
+  | `Char_batch of string
   | `Char of int
   | `Comment of string
   | `EOF ]
@@ -98,6 +99,7 @@ open Kstream
 
 let tokenize report (input, get_location) =
   let foreign = ref (fun () -> false) in
+  let char_buf = Buffer.create 256 in
 
   let last_start_tag_name : string option ref = ref None in
 
@@ -416,7 +418,19 @@ let tokenize report (input, get_location) =
         emit_eof ()
 
       | Some (l, c) ->
-        emit (l, `Char c) data_state
+        Buffer.clear char_buf;
+        add_utf_8 char_buf c;
+        let rec accumulate () =
+          next_option input !throw begin function
+            | Some (_, c) when c <> 0x0026 && c <> 0x003C && c <> 0 ->
+              add_utf_8 char_buf c;
+              accumulate ()
+            | v ->
+              push_option input v;
+              emit (l, `Char_batch (Buffer.contents char_buf)) data_state
+          end
+        in
+        accumulate ()
     end
 
   (* 8.2.4.2, 8.2.4.4. *)

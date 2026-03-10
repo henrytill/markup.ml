@@ -37,6 +37,23 @@ let add_string text location s =
   adding text location;
   Buffer.add_string text.buffer s
 
+(* Adds a UTF-8 encoded batch string, respecting length_limit splitting. *)
+let add_batch text location s =
+  note_location text location;
+  let decoder = Uutf.decoder ~encoding:`UTF_8 (`String s) in
+  let rec loop () =
+    match Uutf.decode decoder with
+    | `Uchar c ->
+      if Buffer.length text.buffer >= !length_limit then begin
+        text.strings <- (Buffer.contents text.buffer) :: text.strings;
+        Buffer.clear text.buffer
+      end;
+      add_utf_8 text.buffer (Uchar.to_int c);
+      loop ()
+    | _ -> ()
+  in
+  loop ()
+
 let emit text =
   match text.location with
   | None -> None

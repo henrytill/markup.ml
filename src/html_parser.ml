@@ -177,6 +177,8 @@ struct
         | _, `Doctype _ -> k `Document
         | _, `Char c when not @@ is_whitespace c -> k (`Fragment "body")
         | _, `Char _ -> scan ()
+        | _, `Char_batch s when not (is_whitespace_only s) -> k (`Fragment "body")
+        | _, `Char_batch _ -> scan ()
         | _, `EOF -> k (`Fragment "body")
         | _, `Start {name = "html"} -> k `Document
         | _, `Start {name = "head" | "body" | "frameset"} ->
@@ -1037,6 +1039,25 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
   let add_character = Text.add text in
 
+  let push_string_chars (line, col) s =
+    let chars = ref [] in
+    let line = ref line in
+    let col = ref col in
+    let decoder = Uutf.decoder ~encoding:`UTF_8 (`String s) in
+    let rec collect () =
+      match Uutf.decode decoder with
+      | `Uchar c ->
+        let c_int = Uchar.to_int c in
+        chars := ((!line, !col), `Char c_int) :: !chars;
+        if c_int = 0x0A then (incr line; col := 1)
+        else incr col;
+        collect ()
+      | _ -> ()
+    in
+    collect ();
+    push_list tokens (List.rev !chars)
+  in
+
   set_foreign (fun () ->
     Stack.current_element_is_foreign context open_elements);
 
@@ -1373,7 +1394,7 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         | Some {element_name = `MathML, "annotation-xml"},
             `Start {name = "svg"} -> false
         | Some {is_html_integration_point = true}, `Start _ -> false
-        | Some {is_html_integration_point = true}, `Char _ -> false
+        | Some {is_html_integration_point = true}, (`Char _ | `Char_batch _) -> false
         | _, `EOF -> false
         | _ -> true
       in
@@ -1386,6 +1407,9 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
   and initial_mode () =
     dispatch tokens begin function
       | _, `Char (0x0009 | 0x000A | 0x000C | 0x000D | 0x0020) ->
+        initial_mode ()
+      | l, `Char_batch s ->
+        push_string_chars l s;
         initial_mode ()
 
       | l, `Comment s ->
@@ -1411,6 +1435,9 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
       | _, `Char (0x0009 | 0x000A | 0x000C | 0x000D | 0x0020) ->
         before_html_mode ()
+      | l, `Char_batch s ->
+        push_string_chars l s;
+        before_html_mode ()
 
       | l, `Start ({name = "html"} as t) ->
         push_and_emit l t before_head_mode
@@ -1428,6 +1455,9 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
   and before_head_mode () =
     dispatch tokens begin function
       | _, `Char (0x0009 | 0x000A | 0x000C | 0x000D | 0x0020) ->
+        before_head_mode ()
+      | l, `Char_batch s ->
+        push_string_chars l s;
         before_head_mode ()
 
       | l, `Comment s ->
@@ -1518,6 +1548,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
     | l, `End {name} when not @@ list_mem_string name ["body"; "html"; "br"] ->
       report l (`Unmatched_end_tag name) !throw mode
 
+    | l, `Char_batch s ->
+      push_string_chars l s;
+      mode ()
+
     | l, _ as v ->
       push tokens v;
       pop l after_head_mode
@@ -1547,6 +1581,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
       | l, `End {name} when name <> "br" ->
         report l (`Unmatched_end_tag name) !throw in_head_noscript_mode
+
+      | l, `Char_batch s ->
+        push_string_chars l s;
+        in_head_noscript_mode ()
 
       | l, _ as v ->
         report l (`Bad_content "noscript") !throw (fun () ->
@@ -1603,6 +1641,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
              || Context.the_context context = `Fragment (`HTML, "head")) ->
         emit_end l
 
+      | l, `Char_batch s ->
+        push_string_chars l s;
+        after_head_mode ()
+
       | l, _ as t ->
         push tokens t;
         push_implicit l "body" in_body_mode
@@ -1626,6 +1668,12 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       frameset_ok := false;
       reconstruct_active_formatting_elements (fun () ->
       add_character l c;
+      mode ())
+
+    | l, `Char_batch s ->
+      if not (is_whitespace_only s) then frameset_ok := false;
+      reconstruct_active_formatting_elements (fun () ->
+      Text.add_batch text l s;
       mode ())
 
     | l, `Comment s ->
@@ -1722,6 +1770,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       push_and_emit l t (fun () ->
       next_expected tokens !throw (function
         | _, `Char 0x000A -> mode ()
+        | (line, _), `Char_batch s when s.[0] = '\n' ->
+          let rest = String.sub s 1 (String.length s - 1) in
+          if rest <> "" then push tokens ((line + 1, 1), `Char_batch rest);
+          mode ()
         | v ->
           push tokens v;
           mode ())))
@@ -2067,6 +2119,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         add_character l c;
         text_mode original_mode
 
+      | l, `Char_batch s ->
+        Text.add_batch text l s;
+        text_mode original_mode
+
       | l, `EOF as v ->
         report l (`Unexpected_eoi "content") !throw (fun () ->
         push tokens v;
@@ -2102,6 +2158,12 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
         when Stack.current_element_is open_elements
                ["table"; "tbody"; "tfoot"; "thead"; "tr"] ->
       push tokens v;
+      in_table_text_mode true [] mode
+
+    | l, `Char_batch s
+        when Stack.current_element_is open_elements
+               ["table"; "tbody"; "tfoot"; "thead"; "tr"] ->
+      push_string_chars l s;
       in_table_text_mode true [] mode
 
     | l, `Comment s ->
@@ -2184,6 +2246,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
       | _, `Char _ as v ->
         in_table_text_mode false (v::cs) mode
+
+      | l, `Char_batch s ->
+        push_string_chars l s;
+        in_table_text_mode only_space cs mode
 
       | v ->
         push tokens v;
@@ -2282,6 +2348,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
       | _, `EOF as v ->
         in_body_mode_rules "colgroup" in_column_group_mode v
+
+      | l, `Char_batch s ->
+        push_string_chars l s;
+        in_column_group_mode ()
 
       | l, _ as v ->
         if not @@ Stack.current_element_is open_elements ["colgroup"] then
@@ -2447,6 +2517,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       add_character l c;
       mode ()
 
+    | l, `Char_batch s ->
+      Text.add_batch text l s;
+      mode ()
+
     | l, `Comment s ->
       emit l (`Comment s) mode
 
@@ -2550,7 +2624,7 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
   (* 8.2.5.4.18. *)
   and in_template_mode_rules mode = function
-    | _, (`Char _ | `Comment _ | `Doctype _) as v ->
+    | _, (`Char _ | `Char_batch _ | `Comment _ | `Doctype _) as v ->
       in_body_mode_rules "template" mode v
 
     | _, `Start {name =
@@ -2625,6 +2699,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       | l, `EOF ->
         emit_end l
 
+      | l, `Char_batch s ->
+        push_string_chars l s;
+        after_body_mode ()
+
       | l, _ as v ->
         report l (`Bad_document "content after body") !throw (fun () ->
         push tokens v;
@@ -2676,6 +2754,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
           else mode' ())
         (fun () -> emit_end l)
 
+      | l, `Char_batch s ->
+        push_string_chars l s;
+        in_frameset_mode ()
+
       | l, _ ->
         report l (`Bad_content "frameset") !throw in_frameset_mode
     end
@@ -2706,6 +2788,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
       | l, `EOF ->
         emit_end l
 
+      | l, `Char_batch s ->
+        push_string_chars l s;
+        after_frameset_mode ()
+
       | l, _ ->
         report l (`Bad_content "html") !throw after_frameset_mode
     end
@@ -2723,6 +2809,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
       | l, `EOF ->
         emit_end l
+
+      | l, `Char_batch s ->
+        push_string_chars l s;
+        after_after_body_mode ()
 
       | l, _ as v ->
         push tokens v;
@@ -2745,6 +2835,10 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
 
       | _, `Start {name = "noframes"} as v ->
         in_head_mode_rules after_after_frameset_mode v
+
+      | l, `Char_batch s ->
+        push_string_chars l s;
+        after_after_frameset_mode ()
 
       | l, _ ->
         report l (`Bad_content "html") !throw after_after_frameset_mode
@@ -2782,6 +2876,11 @@ let parse requested_context report (tokens, set_tokenizer_state, set_foreign) =
     | l, `Char c ->
       frameset_ok := false;
       add_character l c;
+      mode ()
+
+    | l, `Char_batch s ->
+      if not (is_whitespace_only s) then frameset_ok := false;
+      Text.add_batch text l s;
       mode ()
 
     | l, `Comment s ->

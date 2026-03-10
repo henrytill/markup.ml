@@ -55,6 +55,7 @@ type general_token =
   | `Start of Token_tag.t
   | `End of Token_tag.t
   | `Chars of string list
+  | `Char_batch of string
   | `Char of int
   | `PI of string * string
   | `Comment of string
@@ -227,6 +228,9 @@ let token_to_string = function
 
   | `Chars ss ->
     String.concat "" ss
+
+  | `Char_batch s ->
+    s
 
   | `Char i ->
     char i

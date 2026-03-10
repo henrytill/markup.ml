@@ -62,18 +62,23 @@ let char_sequence ?(start = 1) ?(no_eof = false) s =
   in
   assemble [] 0
 
+(* Helper: char_batch followed by rest - for tests where data_state batches
+   the first char(s) before a state switch. *)
+let f_then rest = [1, 1, S (`Char_batch "f")] @ rest
+
 let tests = [
   ("html.tokenizer.empty" >:: fun _ ->
     expect "" [ 1,  1, S  `EOF]);
 
   ("html.tokenizer.text" >:: fun _ ->
-    expect "foo" (char_sequence "foo");
+    expect "foo" [ 1, 1, S (`Char_batch "foo"); 1, 4, S `EOF];
 
     expect "f\x00oo"
-      ([ 1,  1, S (`Char 0x66);
-         1,  2, E (`Bad_token ("U+0000", "content", "null"));
-         1,  2, S (`Char 0x00)] @
-       (char_sequence ~start:3 "oo")));
+      [ 1,  1, S (`Char_batch "f");
+        1,  2, E (`Bad_token ("U+0000", "content", "null"));
+        1,  2, S (`Char 0x00);
+        1,  3, S (`Char_batch "oo");
+        1,  5, S  `EOF]);
 
   ("html.tokenizer.reference" >:: fun _ ->
     expect "&lt;&nbsp;&#48;&#x31;&#X32;&acE;"
@@ -86,12 +91,18 @@ let tests = [
         1, 28, S (`Char 0x0333);
         1, 33, S  `EOF];
 
-    expect "&\t" (char_sequence "&\t");
+    expect "&\t"
+      [ 1,  1, S (`Char 0x26);
+        1,  2, S (`Char_batch "\t");
+        1,  3, S  `EOF];
     expect "&\n"
       [ 1,  1, S (`Char 0x26);
-        1,  2, S (`Char 0x0A);
+        1,  2, S (`Char_batch "\n");
         2,  1, S  `EOF];
-    expect "& " (char_sequence "& ");
+    expect "& "
+      [ 1,  1, S (`Char 0x26);
+        1,  2, S (`Char_batch " ");
+        1,  3, S  `EOF];
     expect "&<"
       [ 1,  1, S (`Char 0x26);
         1,  3, E (`Unexpected_eoi "tag");
@@ -104,33 +115,39 @@ let tests = [
     let reference = "character reference" in
 
     expect "&#z"
-      ([ 1,  1, E (`Bad_token ("&#", reference, "expected digits"))] @
-       (char_sequence "&#z"));
+      [ 1,  1, E (`Bad_token ("&#", reference, "expected digits"));
+        1,  1, S (`Char 0x26);
+        1,  2, S (`Char_batch "#z");
+        1,  4, S  `EOF];
 
     expect "&#xz"
-      ([ 1,  1, E (`Bad_token ("&#x", reference, "expected digits"))] @
-       (char_sequence "&#xz"));
+      [ 1,  1, E (`Bad_token ("&#x", reference, "expected digits"));
+        1,  1, S (`Char 0x26);
+        1,  2, S (`Char_batch "#xz");
+        1,  5, S  `EOF];
 
     expect "&#Xz"
-      ([ 1,  1, E (`Bad_token ("&#X", reference, "expected digits"))] @
-       (char_sequence "&#Xz"));
+      [ 1,  1, E (`Bad_token ("&#X", reference, "expected digits"));
+        1,  1, S (`Char 0x26);
+        1,  2, S (`Char_batch "#Xz");
+        1,  5, S  `EOF];
 
     expect "&#48z"
       [ 1,  1, E (`Bad_token ("&#48", reference, "missing ';' at end"));
         1,  1, S (`Char 0x30);
-        1,  5, S (`Char 0x7A);
+        1,  5, S (`Char_batch "z");
         1,  6, S  `EOF];
 
     expect "&#x30z"
       [ 1,  1, E (`Bad_token ("&#x30", reference, "missing ';' at end"));
         1,  1, S (`Char 0x30);
-        1,  6, S (`Char 0x7A);
+        1,  6, S (`Char_batch "z");
         1,  7, S  `EOF];
 
     expect "&#X30z"
       [ 1,  1, E (`Bad_token ("&#X30", reference, "missing ';' at end"));
         1,  1, S (`Char 0x30);
-        1,  6, S (`Char 0x7A);
+        1,  6, S (`Char_batch "z");
         1,  7, S  `EOF];
 
     expect "&#1000000000000000000000000000000;"
@@ -218,13 +235,21 @@ let tests = [
   ("html.tokenizer.bad-entity-reference" >:: fun _ ->
     let reference = "entity reference" in
 
-    expect "&unknown" (char_sequence "&unknown");
+    expect "&unknown"
+      [ 1,  1, S (`Char 0x26);
+        1,  2, S (`Char_batch "unknown");
+        1,  9, S  `EOF];
 
     expect "&unknown;"
-      ([ 1,  1, E (`Bad_token ("&unknown;", reference, "no such entity"))] @
-       (char_sequence "&unknown;"));
+      [ 1,  1, E (`Bad_token ("&unknown;", reference, "no such entity"));
+        1,  1, S (`Char 0x26);
+        1,  2, S (`Char_batch "unknown;");
+        1, 10, S  `EOF];
 
-    expect "&NBSP" (char_sequence "&NBSP");
+    expect "&NBSP"
+      [ 1,  1, S (`Char 0x26);
+        1,  2, S (`Char_batch "NBSP");
+        1,  6, S  `EOF];
 
     expect "&nbsp"
       ([ 1,  1, E (`Bad_token ("&nbsp", reference, "missing ';' at end"));
@@ -234,27 +259,34 @@ let tests = [
     expect "&ltz"
       ([ 1,  1, E (`Bad_token ("&lt", reference, "missing ';' at end"));
          1,  1, S (`Char 0x3C);
-         1,  4, S (`Char 0x7A);
+         1,  4, S (`Char_batch "z");
          1,  5, S  `EOF]);
 
     expect "&ltz;"
       ([ 1,  1, E (`Bad_token ("&lt", reference, "missing ';' at end"));
          1,  1, S (`Char 0x3C);
-         1,  4, S (`Char 0x7A);
-         1,  5, S (`Char 0x3B);
+         1,  4, S (`Char_batch "z;");
          1,  6, S  `EOF]);
 
-    expect "&a" (char_sequence "&a");
+    expect "&a"
+      [ 1,  1, S (`Char 0x26);
+        1,  2, S (`Char_batch "a");
+        1,  3, S  `EOF];
 
-    expect "&\xc2\xa0" (char_sequence "&\xa0"));
+    expect "&\xc2\xa0"
+      [ 1,  1, S (`Char 0x26);
+        1,  2, S (`Char_batch "\xc2\xa0");
+        1,  3, S  `EOF]);
 
   ("html.tokenizer.rcdata" >:: fun _ ->
     expect ~state:`RCDATA "f&lt;"
-      [ 1,  1, S (`Char 0x66);
+      [ 1,  1, S (`Char_batch "f");
         1,  2, S (`Char 0x3C);
         1,  6, S  `EOF];
 
-    expect ~state:`RCDATA "fo<</</FoO>" (char_sequence "fo<</</FoO>");
+    expect ~state:`RCDATA "fo<</</FoO>"
+      ([ 1,  1, S (`Char_batch "fo")] @
+       (char_sequence ~start:3 "<</</FoO>"));
 
     expect ~state:`RCDATA "<title>foo</bar>&lt;</titlE><a>"
       ([ 1,  1, S (`Start (tag "title" []))] @
@@ -264,7 +296,7 @@ let tests = [
          1, 32, S  `EOF]);
 
     expect ~state:`RCDATA "f\x00</foo>"
-      ([ 1,  1, S (`Char 0x66);
+      ([ 1,  1, S (`Char_batch "f");
          1,  2, E (`Bad_token ("U+0000", "content", "null"));
          1,  2, S (`Char u_rep)] @
        (char_sequence ~start:3 "</foo>"));
@@ -290,9 +322,11 @@ let tests = [
         1, 18, S  `EOF]);
 
   ("html.tokenizer.rawtext" >:: fun _ ->
-    expect ~state:`RAWTEXT "f&lt;" (char_sequence "f&lt;");
+    expect ~state:`RAWTEXT "f&lt;"
+      (f_then (char_sequence ~start:2 "&lt;"));
 
-    expect ~state:`RAWTEXT "f<</</FoO>" (char_sequence "f<</</FoO>");
+    expect ~state:`RAWTEXT "f<</</FoO>"
+      (f_then (char_sequence ~start:2 "<</</FoO>"));
 
     expect ~state:`RAWTEXT "<style>foo</bar>&lt;</style><a>"
       ([ 1,  1, S (`Start (tag "style" []))] @
@@ -302,25 +336,32 @@ let tests = [
          1, 32, S  `EOF]);
 
     expect ~state:`RAWTEXT "f\x00</foo>"
-      ([ 1,  1, S (`Char 0x66);
+      ([ 1,  1, S (`Char_batch "f");
          1,  2, E (`Bad_token ("U+0000", "content", "null"));
          1,  2, S (`Char u_rep)] @
        (char_sequence ~start:3 "</foo>")));
 
   ("html.tokenizer.script-data" >:: fun _ ->
-    expect ~state:`Script_data "f<</</FoO>" (char_sequence "f<</</FoO>");
+    expect ~state:`Script_data "f<</</FoO>"
+      (f_then (char_sequence ~start:2 "<</</FoO>"));
 
-    expect ~state:`Script_data "f<!a" (char_sequence "f<!a");
+    expect ~state:`Script_data "f<!a"
+      (f_then (char_sequence ~start:2 "<!a"));
 
-    expect ~state:`Script_data "f<!-a" (char_sequence "f<!-a");
+    expect ~state:`Script_data "f<!-a"
+      (f_then (char_sequence ~start:2 "<!-a"));
 
-    expect ~state:`Script_data "f<!-->" (char_sequence "f<!-->");
+    expect ~state:`Script_data "f<!-->"
+      (f_then (char_sequence ~start:2 "<!-->" ));
 
-    expect ~state:`Script_data "f<!--->" (char_sequence "f<!--->");
+    expect ~state:`Script_data "f<!--->"
+      (f_then (char_sequence ~start:2 "<!--->" ));
 
-    expect ~state:`Script_data "f<!--a-->" (char_sequence "f<!--a-->");
+    expect ~state:`Script_data "f<!--a-->"
+      (f_then (char_sequence ~start:2 "<!--a-->"));
 
-    expect ~state:`Script_data "f<!--<a-->" (char_sequence "f<!--<a-->");
+    expect ~state:`Script_data "f<!--<a-->"
+      (f_then (char_sequence ~start:2 "<!--<a-->"));
 
     expect ~state:`Script_data "<script><!--a</script><a>"
       ([ 1,  1, S (`Start (tag "script" []))] @
@@ -330,80 +371,89 @@ let tests = [
          1, 26, S  `EOF]);
 
     expect ~state:`Script_data "f<!--o\x00o"
-      ((char_sequence ~no_eof:true "f<!--o") @
-       [1,  7, E (`Bad_token ("U+0000", "script", "null"));
-        1,  7, S (`Char u_rep);
-        1,  8, S (`Char 0x6F);
-        1,  9, E (`Unexpected_eoi "script");
-        1,  9, S  `EOF]);
+      (f_then
+       ((char_sequence ~start:2 ~no_eof:true "<!--o") @
+        [1,  7, E (`Bad_token ("U+0000", "script", "null"));
+         1,  7, S (`Char u_rep);
+         1,  8, S (`Char 0x6F);
+         1,  9, E (`Unexpected_eoi "script");
+         1,  9, S  `EOF]));
 
-    expect ~state:`Script_data "f<!--a-a-->" (char_sequence "f<!--a-a-->");
+    expect ~state:`Script_data "f<!--a-a-->"
+      (f_then (char_sequence ~start:2 "<!--a-a-->"));
 
-    expect ~state:`Script_data "f<!--a-<a-->" (char_sequence "f<!--a-<a-->");
+    expect ~state:`Script_data "f<!--a-<a-->"
+      (f_then (char_sequence ~start:2 "<!--a-<a-->"));
 
     expect ~state:`Script_data "f<!--a-<scRipt-->"
-      (char_sequence "f<!--a-<scRipt-->");
+      (f_then (char_sequence ~start:2 "<!--a-<scRipt-->"));
 
     expect ~state:`Script_data "f<!--a-<scRipt>-->"
-      (char_sequence "f<!--a-<scRipt>-->");
+      (f_then (char_sequence ~start:2 "<!--a-<scRipt>-->"));
 
     expect ~state:`Script_data "f<!--a-<scRipt>a</scripT>-->"
-      (char_sequence "f<!--a-<scRipt>a</scripT>-->");
+      (f_then (char_sequence ~start:2 "<!--a-<scRipt>a</scripT>-->"));
 
     expect ~state:`Script_data "f<!--a-<script>-a-</script>-->"
-      (char_sequence "f<!--a-<script>-a-</script>-->");
+      (f_then (char_sequence ~start:2 "<!--a-<script>-a-</script>-->"));
 
     expect ~state:`Script_data "f<!--a-<script>--a---<--</script>-->"
-      (char_sequence "f<!--a-<script>--a---<--</script>-->");
+      (f_then (char_sequence ~start:2 "<!--a-<script>--a---<--</script>-->"));
 
     expect ~state:`Script_data "f<!--a-<script>a</a></0-->"
-      (char_sequence "f<!--a-<script>a</a></0-->");
+      (f_then (char_sequence ~start:2 "<!--a-<script>a</a></0-->"));
 
     expect ~state:`Script_data "f<!--a-<a>a-->"
-      (char_sequence "f<!--a-<a>a-->");
+      (f_then (char_sequence ~start:2 "<!--a-<a>a-->"));
 
     expect ~state:`Script_data "f<!--a-\x00-"
-      ((char_sequence ~no_eof:true "f<!--a-") @
-       [ 1,  8, E (`Bad_token ("U+0000", "script", "null"));
-         1,  8, S (`Char u_rep);
-         1,  9, S (`Char 0x02D);
-         1, 10, E (`Unexpected_eoi "script");
-         1, 10, S  `EOF]);
+      (f_then
+       ((char_sequence ~start:2 ~no_eof:true "<!--a-") @
+        [ 1,  8, E (`Bad_token ("U+0000", "script", "null"));
+          1,  8, S (`Char u_rep);
+          1,  9, S (`Char 0x02D);
+          1, 10, E (`Unexpected_eoi "script");
+          1, 10, S  `EOF]));
 
     expect ~state:`Script_data "f<!--a--\x00--"
-      ((char_sequence ~no_eof:true "f<!--a--") @
-       [ 1,  9, E (`Bad_token ("U+0000", "script", "null"));
-         1,  9, S (`Char u_rep);
-         1, 10, S (`Char 0x02D);
-         1, 11, S (`Char 0x02D);
-         1, 12, E (`Unexpected_eoi "script");
-         1, 12, S  `EOF]);
+      (f_then
+       ((char_sequence ~start:2 ~no_eof:true "<!--a--") @
+        [ 1,  9, E (`Bad_token ("U+0000", "script", "null"));
+          1,  9, S (`Char u_rep);
+          1, 10, S (`Char 0x02D);
+          1, 11, S (`Char 0x02D);
+          1, 12, E (`Unexpected_eoi "script");
+          1, 12, S  `EOF]));
 
     expect ~state:`Script_data "f<!--<script>\x00"
-      ((char_sequence ~no_eof:true "f<!--<script>") @
-       [ 1, 14, E (`Bad_token ("U+0000", "script", "null"));
-         1, 14, S (`Char u_rep);
-         1, 15, E (`Unexpected_eoi "script");
-         1, 15, S  `EOF]);
+      (f_then
+       ((char_sequence ~start:2 ~no_eof:true "<!--<script>") @
+        [ 1, 14, E (`Bad_token ("U+0000", "script", "null"));
+          1, 14, S (`Char u_rep);
+          1, 15, E (`Unexpected_eoi "script");
+          1, 15, S  `EOF]));
 
     expect ~state:`Script_data "f<!--<script>-\x00-"
-      ((char_sequence ~no_eof:true "f<!--<script>-") @
-       [ 1, 15, E (`Bad_token ("U+0000", "script", "null"));
-         1, 15, S (`Char u_rep);
-         1, 16, S (`Char 0x2D);
-         1, 17, E (`Unexpected_eoi "script");
-         1, 17, S  `EOF]);
+      (f_then
+       ((char_sequence ~start:2 ~no_eof:true "<!--<script>-") @
+        [ 1, 15, E (`Bad_token ("U+0000", "script", "null"));
+          1, 15, S (`Char u_rep);
+          1, 16, S (`Char 0x2D);
+          1, 17, E (`Unexpected_eoi "script");
+          1, 17, S  `EOF]));
 
     expect ~state:`Script_data "f<!--<script>--\x00--"
-      ((char_sequence ~no_eof:true "f<!--<script>--") @
-       [ 1, 16, E (`Bad_token ("U+0000", "script", "null"));
-         1, 16, S (`Char u_rep);
-         1, 17, S (`Char 0x2D);
-         1, 18, S (`Char 0x2D);
-         1, 19, E (`Unexpected_eoi "script");
-         1, 19, S  `EOF]);
+      (f_then
+       ((char_sequence ~start:2 ~no_eof:true "<!--<script>--") @
+        [ 1, 16, E (`Bad_token ("U+0000", "script", "null"));
+          1, 16, S (`Char u_rep);
+          1, 17, S (`Char 0x2D);
+          1, 18, S (`Char 0x2D);
+          1, 19, E (`Unexpected_eoi "script");
+          1, 19, S  `EOF]));
 
-    expect ~state:`Script_data "f<!--a< -->" (char_sequence "f<!--a< -->");
+    expect ~state:`Script_data "f<!--a< -->"
+      (f_then (char_sequence ~start:2 "<!--a< -->"));
 
     expect ~state:`Script_data "<script>foo</bar>&lt;</script><a>"
       ([ 1,  1, S (`Start (tag "script" []))] @
@@ -413,7 +463,7 @@ let tests = [
          1, 34, S  `EOF]);
 
     expect ~state:`Script_data "f\x00</foo>"
-      ([ 1,  1, S (`Char 0x66);
+      ([ 1,  1, S (`Char_batch "f");
          1,  2, E (`Bad_token ("U+0000", "content", "null"));
          1,  2, S (`Char u_rep)] @
        (char_sequence ~start:3 "</foo>")));
@@ -424,7 +474,7 @@ let tests = [
        (char_sequence ~start:12 "foo&lt;</plaintext>"));
 
     expect ~state:`PLAINTEXT "f\x00</foo>"
-      ([ 1,  1, S (`Char 0x66);
+      ([ 1,  1, S (`Char_batch "f");
          1,  2, E (`Bad_token ("U+0000", "content", "null"));
          1,  2, S (`Char u_rep)] @
        (char_sequence ~start:3 "</foo>")));
@@ -623,7 +673,7 @@ let tests = [
     expect "<!DOCTYPE html P>f"
       [ 1, 16, E (`Bad_token ("P", "doctype", "expected 'PUBLIC' or 'SYSTEM'"));
         1,  1, S (`Doctype (doctype ~name:"html" ~force_quirks:true ()));
-        1, 18, S (`Char 0x66);
+        1, 18, S (`Char_batch "f");
         1, 19, S  `EOF];
 
     expect "<!DOCTYPE html PUBLIC'foo'>"
@@ -673,7 +723,7 @@ let tests = [
         1,  1, S (`Doctype (doctype ~name:"html"
                                     ~public_identifier:"f\xef\xbf\xbdoo"
                                     ~force_quirks:true ()));
-        1, 29, S (`Char 0x66);
+        1, 29, S (`Char_batch "f");
         1, 30, S  `EOF];
 
     expect "<!DOCTYPE html PUBLIC 'foo"
@@ -791,9 +841,10 @@ let tests = [
 
   ("html.tokenizer.start-tag" >:: fun _ ->
     expect "text<foO>text"
-      ((char_sequence ~no_eof:true "text") @
-       [ 1,  5, S (`Start (tag "foo" []))] @
-       (char_sequence ~start:10 "text"));
+      [ 1,  1, S (`Char_batch "text");
+        1,  5, S (`Start (tag "foo" []));
+        1, 10, S (`Char_batch "text");
+        1, 14, S  `EOF];
 
     expect "<foo >"
       [ 1,  1, S (`Start (tag "foo" []));
@@ -916,8 +967,10 @@ let tests = [
 
   ("html.tokenizer.bad-start-tag" >:: fun _ ->
     expect "< "
-      ([ 1,  2, E (`Bad_token (" ", "tag", "invalid start character"))] @
-       (char_sequence "< "));
+      [ 1,  2, E (`Bad_token (" ", "tag", "invalid start character"));
+        1,  1, S (`Char 0x3C);
+        1,  2, S (`Char_batch " ");
+        1,  3, S  `EOF];
 
     expect "<"
       [ 1,  2, E (`Unexpected_eoi "tag");
@@ -968,8 +1021,9 @@ let tests = [
        (char_sequence "</"));
 
     expect "</>foo"
-      ([ 1,  1, E (`Bad_token ("</>", "tag", "no tag name"))] @
-       (char_sequence ~start:4 "foo"));
+      [ 1,  1, E (`Bad_token ("</>", "tag", "no tag name"));
+        1,  4, S (`Char_batch "foo");
+        1,  7, S  `EOF];
 
     expect "</ foo>"
       [ 1,  3, E (`Bad_token (" ", "tag", "invalid start character"));

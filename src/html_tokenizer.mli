@@ -7,6 +7,7 @@ type token =
   [ `Doctype of doctype
   | `Start of Token_tag.t
   | `End of Token_tag.t
+  | `Char_batch of string
   | `Char of int
   | `Comment of string
   | `EOF ]
